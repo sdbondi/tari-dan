@@ -20,34 +20,29 @@
 //  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //  USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-pub mod abi_context;
+use tari_template_macros::template;
 
-mod hash;
-pub use hash::Hash;
+#[template]
+mod tuple_template {
+    pub struct Tuple {
+        pub value: u32,
+    }
 
-#[macro_use]
-pub mod args;
-pub mod models;
+    impl Tuple {
+        pub fn new() -> (Self, String) {
+            (Self { value: 0 }, "Hello World!".to_string())
+        }
 
-mod context;
-pub use context::{get_context, init_context};
+        pub fn tuple_output() -> (String, u32) {
+            ("Hello World!".to_string(), 100)
+        }
 
-pub mod resource;
+        pub fn set(&mut self, value: u32) {
+            self.value = value;
+        }
 
-// ---------------------------------------- WASM target exports ------------------------------------------------
-
-#[cfg(target_arch = "wasm32")]
-pub mod template_dependencies;
-
-#[cfg(target_arch = "wasm32")]
-mod engine;
-#[cfg(target_arch = "wasm32")]
-pub use engine::engine;
-
-#[cfg(target_arch = "wasm32")]
-pub mod panic_hook;
-#[cfg(target_arch = "wasm32")]
-pub mod prelude;
-
-#[cfg(target_arch = "wasm32")]
-pub use prelude::template;
+        pub fn get(&self) -> u32 {
+            self.value
+        }
+    }
+}

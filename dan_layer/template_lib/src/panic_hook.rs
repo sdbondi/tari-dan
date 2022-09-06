@@ -20,60 +20,36 @@
 //   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //   USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use std::marker::PhantomData;
+use tari_template_abi::{debug, on_panic};
 
-use tari_template_abi::{encode, Encode};
+fn hook(info: &std::panic::PanicInfo<'_>) {
+    unsafe { debug("PANIC!".as_ptr(), 6) };
 
-use crate::{
-    args::MintResourceArg,
-    models::{Amount, Bucket, Metadata},
-    resource::ResourceDefinition,
-};
+    let error_msg = info
+        .payload()
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| info.payload().downcast_ref::<&'static str>().copied())
+        .unwrap_or("");
+    let location = info.location();
 
-pub struct ResourceBuilder;
+    unsafe {
+        match location {
+            Some(loc) => {
+                let line = loc.line();
+                let column = loc.column();
 
-impl ResourceBuilder {
-    pub fn fungible<T: ResourceDefinition>() -> FungibleResourceBuilder<T> {
-        FungibleResourceBuilder::new()
+                on_panic(error_msg.as_ptr(), error_msg.len() as u32, line, column)
+            },
+            None => on_panic(error_msg.as_ptr(), error_msg.len() as u32, 0, 0),
+        };
     }
 }
 
-pub struct FungibleResourceBuilder<T> {
-    initial_supply: Amount,
-    metadata: Metadata,
-    _t: PhantomData<T>,
-}
-
-impl<T: ResourceDefinition> FungibleResourceBuilder<T> {
-    fn new() -> Self {
-        Self {
-            _t: PhantomData,
-            initial_supply: Amount::zero(),
-            metadata: Metadata::new(),
-        }
-    }
-
-    pub fn with_token_symbol<S: Into<String>>(mut self, symbol: S) -> Self {
-        self.metadata.insert(b"SYMBOL".to_vec(), symbol.into().into_bytes());
-        self
-    }
-
-    pub fn with_metadata<K: Encode, V: Encode>(mut self, key: K, value: V) -> Self {
-        self.metadata.insert(encode(&key).unwrap(), encode(&value).unwrap());
-        self
-    }
-
-    pub fn initial_supply<A: Into<Amount>>(mut self, initial_supply: A) -> Self {
-        self.initial_supply = initial_supply.into();
-        self
-    }
-
-    pub fn build_bucket(self) -> Bucket<T> {
-        crate::get_context().with_resource_manager(|manager| {
-            manager.mint_resource(MintResourceArg::Fungible {
-                amount: self.initial_supply,
-                metadata: self.metadata,
-            })
-        })
-    }
+pub fn register_panic_hook() {
+    use std::sync::Once;
+    static SET_HOOK: Once = Once::new();
+    SET_HOOK.call_once(|| {
+        std::panic::set_hook(Box::new(hook));
+    });
 }

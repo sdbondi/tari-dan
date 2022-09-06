@@ -31,6 +31,7 @@ mod processor;
 pub use processor::InstructionProcessor;
 
 mod signature;
+
 pub use signature::InstructionSignature;
 use tari_common_types::types::{BulletRangeProof, ComSignature, Commitment, FixedHash, PublicKey};
 use tari_crypto::hash::blake2::Blake256;
