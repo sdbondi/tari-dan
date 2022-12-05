@@ -23,7 +23,7 @@
 use digest::{Digest, FixedOutput};
 use serde::{Deserialize, Serialize};
 use tari_common_types::types::FixedHash;
-use tari_core::ValidatorNodeMmr;
+use tari_core::{ValidatorNodeMmr, ValidatorNodeMmrHasherBlake256};
 use tari_crypto::hash::blake2::Blake256;
 use tari_dan_common_types::{
     hashing::tari_hasher,
@@ -39,6 +39,8 @@ use tari_engine_types::commit_result::RejectReason;
 use tari_mmr::MerkleProof;
 
 use crate::{services::SigningService, workers::hotstuff_error::HotStuffError, TariDanCoreHashDomain};
+
+const LOG_TARGET: &str = "tari::dan_layer::votemessage";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VoteMessage {
@@ -121,6 +123,20 @@ impl VoteMessage {
             .ok_or(HotStuffError::ValidatorNodeNotIncludedInMmr)?;
         let merkle_proof =
             MerkleProof::for_leaf_node(vn_mmr, leaf_pos as usize).expect("Merkle proof generation failed");
+
+        let hash = vn_mmr_node_hash(signing_service.public_key(), &shard_id);
+        log::error!(target: LOG_TARGET, "!!!!!!!!!!!!!!!! hash = {}", hash);
+        let root = vn_mmr.get_merkle_root().unwrap();
+        let idx = vn_mmr.find_leaf_index(&*hash).unwrap();
+        log::error!(target: LOG_TARGET, "!!!!!!!!!!!!!!!! idx = {:?}", idx);
+        log::error!(
+            target: LOG_TARGET,
+            "!!!!!!!!!!!!!!!! root = {}",
+            tari_utilities::hex::to_hex(&root)
+        );
+        let r = merkle_proof.verify::<ValidatorNodeMmrHasherBlake256>(&root, &*hash, leaf_pos as usize);
+
+        log::error!(target: LOG_TARGET, "!!!!!!!! {:?}", r);
 
         let validator_metadata = ValidatorMetadata::new(
             signing_service.public_key().clone(),

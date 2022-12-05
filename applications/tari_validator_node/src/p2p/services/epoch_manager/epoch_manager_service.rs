@@ -23,12 +23,13 @@
 use std::sync::Arc;
 
 use log::error;
+use tari_common_types::types::FixedHash;
 use tari_comms::{types::CommsPublicKey, NodeIdentity};
-use tari_core::ValidatorNodeMmr;
+use tari_core::{transactions::transaction_components::ValidatorNodeRegistration, ValidatorNodeMmr};
 use tari_dan_common_types::{Epoch, ShardId};
 use tari_dan_core::{
     consensus_constants::ConsensusConstants,
-    models::{BaseLayerMetadata, Committee, ValidatorNode},
+    models::{Committee, ValidatorNode},
     services::epoch_manager::{EpochManagerError, ShardCommitteeAllocation},
 };
 use tari_dan_storage_sqlite::{sqlite_shard_store_factory::SqliteShardStore, SqliteDbFactory};
@@ -69,8 +70,14 @@ pub enum EpochManagerRequest {
         addr: CommsPublicKey,
         reply: Reply<ShardId>,
     },
+    AddValidatorNodeRegistration {
+        block_height: u64,
+        registration: ValidatorNodeRegistration,
+        reply: Reply<()>,
+    },
     UpdateEpoch {
-        tip_info: BaseLayerMetadata,
+        block_height: u64,
+        block_hash: FixedHash,
         reply: Reply<()>,
     },
     LastRegistrationEpoch {
@@ -129,7 +136,6 @@ pub enum EpochManagerEvent {
 
 impl EpochManagerService {
     pub fn spawn(
-        id: CommsPublicKey,
         rx_request: Receiver<EpochManagerRequest>,
         shutdown: ShutdownSignal,
         db_factory: SqliteDbFactory,
@@ -138,17 +144,16 @@ impl EpochManagerService {
         consensus_constants: ConsensusConstants,
         node_identity: Arc<NodeIdentity>,
         validator_node_client_factory: TariCommsValidatorNodeClientFactory,
-    ) -> JoinHandle<Result<(), EpochManagerError>> {
+    ) -> JoinHandle<()> {
         tokio::spawn(async move {
             let (tx, rx) = broadcast::channel(10);
-            EpochManagerService {
+            let result = EpochManagerService {
                 rx_request,
                 inner: BaseLayerEpochManager::new(
                     db_factory,
                     shard_store,
                     base_node_client,
                     consensus_constants,
-                    id,
                     tx.clone(),
                     node_identity,
                     validator_node_client_factory,
@@ -156,7 +161,11 @@ impl EpochManagerService {
                 events: (tx, rx),
             }
             .run(shutdown)
-            .await
+            .await;
+
+            if let Err(err) = result {
+                error!(target: LOG_TARGET, "Epoch manager service failed with error: {}", err);
+            }
         })
     }
 
@@ -182,8 +191,12 @@ impl EpochManagerService {
             EpochManagerRequest::GetValidatorShardKey { epoch, addr, reply } => {
                 handle(reply, self.inner.get_validator_shard_key(epoch, &addr))
             },
-            EpochManagerRequest::UpdateEpoch { tip_info, reply } => {
-                handle(reply, self.inner.update_epoch(tip_info).await);
+            EpochManagerRequest::UpdateEpoch {
+                block_height,
+                block_hash,
+                reply,
+            } => {
+                handle(reply, self.inner.update_epoch(block_height, block_hash).await);
             },
             EpochManagerRequest::LastRegistrationEpoch { reply } => {
                 handle(reply, self.inner.last_registration_epoch().await)
@@ -224,6 +237,16 @@ impl EpochManagerService {
             EpochManagerRequest::GetValidatorNodesPerEpoch { epoch, reply } => {
                 handle(reply, self.inner.get_validator_nodes_per_epoch(epoch))
             },
+            EpochManagerRequest::AddValidatorNodeRegistration {
+                block_height,
+                registration,
+                reply,
+            } => handle(
+                reply,
+                self.inner
+                    .add_validator_node_registration(block_height, registration)
+                    .await,
+            ),
         }
     }
 }

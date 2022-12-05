@@ -5807,6 +5807,7 @@ dependencies = [
  "bincode",
  "borsh",
  "digest 0.9.0",
+ "newtype-ops",
  "prost",
  "prost-types",
  "serde",
@@ -5902,6 +5903,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "tari_common_types",
+ "tari_dan_common_types",
  "thiserror",
  "time 0.3.17",
 ]
@@ -5928,6 +5930,7 @@ dependencies = [
  "diesel",
  "diesel_migrations",
  "log",
+ "serde",
  "serde_json",
  "tari_common",
  "tari_common_types",

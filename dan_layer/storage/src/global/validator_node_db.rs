@@ -20,6 +20,8 @@
 //   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //   USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use tari_dan_common_types::Epoch;
+
 use crate::global::GlobalDbAdapter;
 
 pub struct ValidatorNodeDb<'a, TGlobalDbAdapter: GlobalDbAdapter> {
@@ -44,9 +46,13 @@ impl<'a, TGlobalDbAdapter: GlobalDbAdapter> ValidatorNodeDb<'a, TGlobalDbAdapter
             .map_err(TGlobalDbAdapter::Error::into)
     }
 
-    pub fn get_all_per_epoch(&self, epoch: u64) -> Result<Vec<DbValidatorNode>, TGlobalDbAdapter::Error> {
+    pub fn get_all_within_epochs(
+        &self,
+        start_epoch: u64,
+        end_epoch: u64,
+    ) -> Result<Vec<DbValidatorNode>, TGlobalDbAdapter::Error> {
         self.backend
-            .get_validator_nodes_per_epoch(self.tx, epoch)
+            .get_validator_nodes_within_epochs(self.tx, start_epoch, end_epoch)
             .map_err(TGlobalDbAdapter::Error::into)
     }
 }
@@ -55,5 +61,5 @@ impl<'a, TGlobalDbAdapter: GlobalDbAdapter> ValidatorNodeDb<'a, TGlobalDbAdapter
 pub struct DbValidatorNode {
     pub public_key: Vec<u8>,
     pub shard_key: Vec<u8>,
-    pub epoch: u64,
+    pub epoch: Epoch,
 }

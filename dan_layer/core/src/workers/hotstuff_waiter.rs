@@ -210,7 +210,7 @@ where
             //  Save the payload, because we will need it when the proposal comes back
             tx.set_payload(payload.clone())?;
             tx.commit()?;
-            // TODO: combine merkle proofs into one before sending
+
             new_view = HotStuffMessage::new_view(high_qc, shard, Some(payload));
         }
 
@@ -408,6 +408,10 @@ where
             .get_validator_shard_key(node.epoch(), self.public_key.clone())
             .await?;
         let vn_mmr = self.epoch_manager.get_validator_node_mmr(node.epoch()).await?;
+        let mr = self.epoch_manager.get_validator_node_merkle_root(node.epoch()).await?;
+        if vn_mmr.get_merkle_root().unwrap() != mr {
+            error!(target: LOG_TARGET, "🔥 Merkle root mismatch for epoch {}", node.epoch());
+        }
 
         {
             let mut tx = self.shard_store.create_tx()?;
@@ -707,7 +711,7 @@ where
                     &*md.get_node_hash(),
                     md.merkle_leaf_index as usize,
                 )
-                .map_err(|_| HotStuffError::InvalidQuorumCertificate("invalid merkle proof".to_string()))?;
+                .map_err(|e| HotStuffError::InvalidQuorumCertificate(format!("invalid merkle proof: {}", e)))?;
         }
 
         // all signers must be included in the epoch commitee for the shard

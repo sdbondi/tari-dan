@@ -23,6 +23,7 @@
 use std::{collections::HashMap, ops::Range};
 
 use async_trait::async_trait;
+use tari_common_types::types::PublicKey;
 use tari_comms::protocol::rpc::{RpcError, RpcStatus};
 use tari_core::ValidatorNodeMmr;
 use tari_dan_common_types::{Epoch, NodeAddressable, ShardId};
@@ -57,7 +58,7 @@ pub enum EpochManagerError {
     #[error("Unexpected response")]
     UnexpectedResponse,
     #[error("Storage error: {0}")]
-    StorageError(#[from] StorageError),
+    StorageError(StorageError),
     #[error("No validator nodes found for current shard key")]
     ValidatorNodesNotFound,
     #[error("Validator node client error: {0}")]
@@ -70,6 +71,16 @@ pub enum EpochManagerError {
     NoCommitteeVns { shard_id: ShardId, epoch: Epoch },
     #[error("This validator node is not registered")]
     ValidatorNodeNotRegistered,
+    #[error("Base layer consensus constants not set")]
+    BaseLayerConsensusConstantsNotSet,
+    #[error("Base layer could not return shard key for {public_key} at height {block_height}")]
+    ShardKeyNotFound { public_key: PublicKey, block_height: u64 },
+}
+
+impl<T: Into<StorageError>> From<T> for EpochManagerError {
+    fn from(e: T) -> Self {
+        Self::StorageError(e.into())
+    }
 }
 
 #[async_trait]
