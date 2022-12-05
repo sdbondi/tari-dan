@@ -70,7 +70,8 @@ pub trait GlobalDbAdapter: AtomicDb + Send + Sync + Clone {
     fn get_validator_node(
         &self,
         tx: &Self::DbTransaction<'_>,
-        epoch: u64,
+        start_epoch: u64,
+        end_epoch: u64,
         public_key: &[u8],
     ) -> Result<DbValidatorNode, Self::Error>;
     fn insert_epoch(&self, tx: &Self::DbTransaction<'_>, epoch: DbEpoch) -> Result<(), Self::Error>;

@@ -264,13 +264,15 @@ impl GlobalDbAdapter for SqliteGlobalDbAdapter {
     fn get_validator_node(
         &self,
         tx: &Self::DbTransaction<'_>,
-        epoch: u64,
+        start_epoch: u64,
+        end_epoch: u64,
         public_key: &[u8],
     ) -> Result<DbValidatorNode, Self::Error> {
         use crate::global::schema::{validator_nodes, validator_nodes::dsl};
 
         let vn = dsl::validator_nodes
-            .filter(validator_nodes::epoch.eq(epoch as i64))
+            .filter(validator_nodes::epoch.ge(start_epoch as i64))
+            .filter(validator_nodes::epoch.le(end_epoch as i64))
             .filter(validator_nodes::public_key.eq(public_key))
             .first::<ValidatorNode>(tx.connection())
             .map_err(|source| SqliteStorageError::DieselError {
@@ -295,7 +297,7 @@ impl GlobalDbAdapter for SqliteGlobalDbAdapter {
             .load::<ValidatorNode>(tx.connection())
             .map_err(|source| SqliteStorageError::DieselError {
                 source,
-                operation: "get::validator_nodes_per_epoch".to_string(),
+                operation: format!("get::validator_nodes_per_epoch({}, {})", start_epoch, end_epoch),
             })?;
 
         // TODO: Perhaps we should overwrite duplicate validator node entries for the epoch validity period
@@ -305,7 +307,7 @@ impl GlobalDbAdapter for SqliteGlobalDbAdapter {
             if let Some(idx) = dedup_map.insert(vn.public_key.clone(), i) {
                 *db_vns.get_mut(idx).unwrap() = None;
             }
-            db_vns.push(Some(vn.into()));
+            db_vns.push(Some(DbValidatorNode::from(vn)));
         }
 
         let mut db_vns = db_vns.into_iter().filter_map(convert::identity).collect::<Vec<_>>();

@@ -40,9 +40,14 @@ impl<'a, TGlobalDbAdapter: GlobalDbAdapter> ValidatorNodeDb<'a, TGlobalDbAdapter
             .map_err(TGlobalDbAdapter::Error::into)
     }
 
-    pub fn get(&self, epoch: u64, public_key: &[u8]) -> Result<DbValidatorNode, TGlobalDbAdapter::Error> {
+    pub fn get(
+        &self,
+        start_epoch: u64,
+        end_epoch: u64,
+        public_key: &[u8],
+    ) -> Result<DbValidatorNode, TGlobalDbAdapter::Error> {
         self.backend
-            .get_validator_node(self.tx, epoch, public_key)
+            .get_validator_node(self.tx, start_epoch, end_epoch, public_key)
             .map_err(TGlobalDbAdapter::Error::into)
     }
 

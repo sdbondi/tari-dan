@@ -251,13 +251,14 @@ impl BaseLayerEpochManager {
         epoch: Epoch,
         public_key: &PublicKey,
     ) -> Result<ShardId, EpochManagerError> {
+        let (start_epoch, end_epoch) = self.get_epoch_range(epoch)?;
         let db = self.db_factory.get_or_create_global_db()?;
         let tx = db
             .create_transaction()
             .map_err(|e| EpochManagerError::StorageError(e.into()))?;
         let vn = db
             .validator_nodes(&tx)
-            .get(epoch.0, public_key.as_bytes())
+            .get(start_epoch.as_u64(), end_epoch.as_u64(), public_key.as_bytes())
             .map_err(|e| EpochManagerError::StorageError(e.into()))?;
 
         Ok(ShardId::from_bytes(&vn.shard_key).expect("Invalid Shard Key, Database is corrupt"))
@@ -369,16 +370,21 @@ impl BaseLayerEpochManager {
         Ok(committee.contains(&identity))
     }
 
-    pub fn get_validator_nodes_per_epoch(
-        &self,
-        end_epoch: Epoch,
-    ) -> Result<Vec<ValidatorNode<CommsPublicKey>>, EpochManagerError> {
+    fn get_epoch_range(&self, end_epoch: Epoch) -> Result<(Epoch, Epoch), EpochManagerError> {
         let consensus_constants = self
             .base_layer_consensus_constants
             .as_ref()
             .ok_or(EpochManagerError::BaseLayerConsensusConstantsNotSet)?;
 
         let start_epoch = end_epoch.saturating_sub(consensus_constants.validator_node_registration_expiry());
+        Ok((start_epoch, end_epoch))
+    }
+
+    pub fn get_validator_nodes_per_epoch(
+        &self,
+        epoch: Epoch,
+    ) -> Result<Vec<ValidatorNode<CommsPublicKey>>, EpochManagerError> {
+        let (start_epoch, end_epoch) = self.get_epoch_range(epoch)?;
 
         let db = self.db_factory.get_or_create_global_db()?;
         let tx = db
@@ -432,9 +438,9 @@ impl BaseLayerEpochManager {
     pub fn get_validator_node_mmr(&self, epoch: Epoch) -> Result<ValidatorNodeMmr, EpochManagerError> {
         let vns = self.get_validator_nodes_per_epoch(epoch)?;
 
-        let mut a = vns.clone();
-        a.sort_by(|a, b| a.shard_key.0.cmp(&b.shard_key.0));
-        assert_eq!(a, vns, "NOT SORTED");
+        // let mut a = vns.clone();
+        // a.sort_by(|a, b| a.shard_key.0.cmp(&b.shard_key.0));
+        // assert_eq!(a, vns, "NOT SORTED");
 
         // TODO: the MMR struct should be serializable to store it only once and avoid recalculating it every time per
         // epoch
@@ -445,12 +451,12 @@ impl BaseLayerEpochManager {
                 .expect("Could not build the merkle mountain range of the VN set");
         }
 
-        let root = self.get_validator_node_merkle_root(epoch)?;
-        if vn_mmr.get_merkle_root().unwrap() == root {
-            eprintln!("OK =!!!!!!!!!!!!!!!!!!!",);
-        } else {
-            panic!("Invalid MR");
-        }
+        // let root = self.get_validator_node_merkle_root(epoch)?;
+        // if vn_mmr.get_merkle_root().unwrap() == root {
+        //     eprintln!("OK =!!!!!!!!!!!!!!!!!!!",);
+        // } else {
+        //     panic!("Invalid MR");
+        // }
 
         Ok(vn_mmr)
     }

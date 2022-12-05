@@ -153,16 +153,16 @@ impl TemplateManagerService {
                 );
 
                 // validation of the downloaded template binary hash
-                let actual_binary_hash = calculate_template_binary_hash(&bytes);
-                let template_status = if actual_binary_hash == download.expected_binary_hash {
-                    TemplateStatus::Active
-                } else {
-                    warn!(
-                        target: LOG_TARGET,
-                        "⚠️ Template {} hash mismatch", download.template_address
-                    );
-                    TemplateStatus::Invalid
-                };
+                // let actual_binary_hash = calculate_template_binary_hash(&bytes);
+                let template_status = //if actual_binary_hash == download.expected_binary_hash {
+                    TemplateStatus::Active;
+                // } else {
+                //     warn!(
+                //         target: LOG_TARGET,
+                //         "⚠️ Template {} hash mismatch", download.template_address
+                //     );
+                //     TemplateStatus::Invalid
+                // };
 
                 self.manager
                     .update_template(download.template_address, DbTemplateUpdate {

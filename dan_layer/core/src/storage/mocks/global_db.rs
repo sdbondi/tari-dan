@@ -103,7 +103,8 @@ impl GlobalDbAdapter for MockGlobalDbBackupAdapter {
     fn get_validator_node(
         &self,
         _tx: &Self::DbTransaction<'_>,
-        _epoch: u64,
+        _start_epoch: u64,
+        _end_epoch: u64,
         _public_key: &[u8],
     ) -> Result<DbValidatorNode, Self::Error> {
         todo!()
