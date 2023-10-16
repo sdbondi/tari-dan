@@ -35,15 +35,15 @@ impl NonFungibleId {
         Self::U256(uuid)
     }
 
-    pub fn from_u256(id: [u8; 32]) -> Self {
+    pub const fn from_u256(id: [u8; 32]) -> Self {
         Self::U256(id)
     }
 
-    pub fn from_u32(id: u32) -> Self {
+    pub const fn from_u32(id: u32) -> Self {
         Self::Uint32(id)
     }
 
-    pub fn from_u64(id: u64) -> Self {
+    pub const fn from_u64(id: u64) -> Self {
         Self::Uint64(id)
     }
 

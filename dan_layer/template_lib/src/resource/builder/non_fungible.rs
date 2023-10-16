@@ -31,6 +31,15 @@ impl NonFungibleResourceBuilder {
         self
     }
 
+    pub fn with_non_fungible<I, T: Serialize, U: Serialize>(
+        self,
+        id: NonFungibleId,
+        immutable_metadata: &T,
+        mutable_metadata: &U,
+    ) -> Self {
+        self.with_non_fungibles(Some((id, (&immutable_metadata, &mutable_metadata))))
+    }
+
     pub fn with_non_fungibles<'a, I, T, U>(mut self, tokens: I) -> Self
     where
         I: IntoIterator<Item = (NonFungibleId, (&'a T, &'a U))>,
