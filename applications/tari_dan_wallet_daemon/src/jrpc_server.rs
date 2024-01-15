@@ -11,13 +11,7 @@ use axum::{
     routing::post,
     Router,
 };
-use axum_jrpc::{
-    error::{JsonRpcError, JsonRpcErrorReason},
-    JrpcResult,
-    JsonRpcAnswer,
-    JsonRpcExtractor,
-    JsonRpcResponse,
-};
+use axum_jrpc::{error::JsonRpcError, JrpcResult, JsonRpcAnswer, JsonRpcExtractor, JsonRpcResponse};
 use log::*;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::json;
@@ -29,7 +23,7 @@ use super::handlers::HandlerContext;
 use crate::handlers::{
     accounts,
     confidential,
-    error::HandlerError,
+    error::{HandlerError, APP_ERR_NOT_FOUND, APP_ERR_UNAUTHORIZED, APP_ERR_UNKNOWN},
     keys,
     nfts,
     rpc,
@@ -198,39 +192,34 @@ where
             })?,
         )
         .await
-        .map_err(|e| resolve_handler_error(answer_id, &e))?;
+        .map_err(|e| resolve_handler_error(answer_id, e))?;
     Ok(JsonRpcResponse::success(answer_id, resp))
 }
 
-fn resolve_handler_error(answer_id: i64, e: &HandlerError) -> JsonRpcResponse {
+fn resolve_handler_error(answer_id: i64, e: HandlerError) -> JsonRpcResponse {
     match e {
         HandlerError::Anyhow(e) => resolve_any_error(answer_id, e),
+        HandlerError::JrpcError(e) => JsonRpcResponse::error(answer_id, e),
         HandlerError::NotFound => JsonRpcResponse::error(
             answer_id,
-            JsonRpcError::new(JsonRpcErrorReason::ApplicationError(404), e.to_string(), json!({})),
+            JsonRpcError::new(APP_ERR_NOT_FOUND, e.to_string(), json!({})),
         ),
     }
 }
 
-fn resolve_any_error(answer_id: i64, e: &anyhow::Error) -> JsonRpcResponse {
+fn resolve_any_error(answer_id: i64, e: anyhow::Error) -> JsonRpcResponse {
     warn!(target: LOG_TARGET, "🌐 JSON-RPC error: {}", e);
-    if let Some(handler_err) = e.downcast_ref::<HandlerError>() {
+    if e.is::<HandlerError>() {
+        let handler_err = e.downcast().expect("error is HandlerError");
         return resolve_handler_error(answer_id, handler_err);
     }
 
     if let Some(error) = e.downcast_ref::<JwtApiError>() {
         JsonRpcResponse::error(
             answer_id,
-            JsonRpcError::new(
-                JsonRpcErrorReason::ApplicationError(401),
-                error.to_string(),
-                serde_json::Value::Null,
-            ),
+            JsonRpcError::new(APP_ERR_UNAUTHORIZED, error.to_string(), serde_json::Value::Null),
         )
     } else {
-        JsonRpcResponse::error(
-            answer_id,
-            JsonRpcError::new(JsonRpcErrorReason::ApplicationError(500), e.to_string(), json!({})),
-        )
+        JsonRpcResponse::error(answer_id, JsonRpcError::new(APP_ERR_UNKNOWN, e.to_string(), json!({})))
     }
 }

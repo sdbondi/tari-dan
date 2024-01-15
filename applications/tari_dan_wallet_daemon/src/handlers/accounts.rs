@@ -3,6 +3,7 @@
 use std::convert::{TryFrom, TryInto};
 
 use anyhow::anyhow;
+use axum_jrpc::error::JsonRpcErrorReason;
 use base64;
 use log::*;
 use rand::rngs::OsRng;
@@ -72,12 +73,9 @@ use tokio::task;
 
 use super::context::HandlerContext;
 use crate::{
-    handlers::helpers::{
-        get_account,
-        get_account_or_default,
-        get_account_with_inputs,
-        invalid_params,
-        wait_for_result,
+    handlers::{
+        error::{json_rpc_error, APP_ERR_TRANSACTION_REJECTED},
+        helpers::{get_account, get_account_or_default, get_account_with_inputs, invalid_params, wait_for_result},
     },
     indexer_jrpc_impl::IndexerJsonRpcNetworkInterface,
     services::{NewAccountInfo, TransactionSubmittedEvent},
@@ -97,7 +95,10 @@ pub async fn handle_create(
 
     if let Some(name) = req.account_name.as_ref() {
         if sdk.accounts_api().get_account_by_name(name).optional()?.is_some() {
-            return Err(anyhow!("Account name '{}' already exists", name));
+            return Err(json_rpc_error(
+                JsonRpcErrorReason::InvalidRequest,
+                format!("Account name '{}' already exists", name),
+            ));
         }
     }
 
@@ -149,11 +150,17 @@ pub async fn handle_create(
 
     let event = wait_for_result(&mut events, tx_id).await?;
     if let Some(reject) = event.finalize.result.reject() {
-        return Err(anyhow!("Create account transaction rejected: {}", reject));
+        return Err(json_rpc_error(
+            APP_ERR_TRANSACTION_REJECTED,
+            format!("Create account transaction rejected: {}", reject),
+        ));
     }
 
     if let Some(reason) = event.finalize.reject() {
-        return Err(anyhow!("Create account transaction failed: {}", reason));
+        return Err(json_rpc_error(
+            APP_ERR_TRANSACTION_REJECTED,
+            format!("Create account transaction failed: {}", reason),
+        ));
     }
 
     let address = event

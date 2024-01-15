@@ -15,7 +15,7 @@ use tari_shutdown::ShutdownSignal;
 use tari_wallet_daemon_client::types::{WebRtcStartRequest, WebRtcStartResponse};
 
 use super::HandlerContext;
-use crate::webrtc::webrtc_start_session;
+use crate::{handlers::error::APP_ERR_UNAUTHORIZED, webrtc::webrtc_start_session};
 
 const LOG_TARGET: &str = "tari::dan::wallet_daemon::json_rpc";
 
@@ -35,7 +35,7 @@ pub fn handle_start(
             JsonRpcResponse::error(
                 answer_id,
                 JsonRpcError::new(
-                    JsonRpcErrorReason::ApplicationError(401),
+                    APP_ERR_UNAUTHORIZED,
                     format!("Not authorized: {e}"),
                     serde_json::Value::Null,
                 ),
