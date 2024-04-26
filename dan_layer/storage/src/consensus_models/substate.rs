@@ -14,8 +14,6 @@ use tari_common_types::types::FixedHash;
 use tari_dan_common_types::{optional::Optional, Epoch, NodeHeight, SubstateAddress};
 use tari_engine_types::substate::{Substate, SubstateId, SubstateValue};
 use tari_transaction::{TransactionId, VersionedSubstateId};
-#[cfg(feature = "ts")]
-use ts_rs::TS;
 
 use crate::{
     consensus_models::{Block, BlockId, QcId, QuorumCertificate},
@@ -27,7 +25,11 @@ use crate::{
 const LOG_TARGET: &str = "tari::dan::storage::consensus_models::substate";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(TS), ts(export, export_to = "../../bindings/src/types/"))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../bindings/src/types/")
+)]
 pub struct SubstateRecord {
     pub substate_id: SubstateId,
     pub version: u32,
@@ -46,7 +48,11 @@ pub struct SubstateRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(TS), ts(export, export_to = "../../bindings/src/types/"))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../bindings/src/types/")
+)]
 pub struct SubstateDestroyed {
     #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub by_transaction: TransactionId,
@@ -404,6 +410,11 @@ impl From<SubstateCreatedProof> for SubstateUpdate {
 /// Substate lock flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../bindings/src/types/")
+)]
 pub enum SubstateLockFlag {
     Read = 0x01,
     Write = 0x02,

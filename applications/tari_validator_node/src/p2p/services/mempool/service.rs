@@ -277,7 +277,7 @@ where
                 .any(|s| s.to_committee_shard(num_committees) == sender_shard);
             // Special temporary case: if there are no input shards an output shard will also propagate. No inputs is
             // invalid, however we must support them for now because of CreateFreeTestCoin transactions.
-            is_input_shard |= transaction.inputs().len() + transaction.input_refs().len() == 0;
+            is_input_shard |= transaction.inputs().len() == 0;
             if !is_input_shard {
                 warn!(target: LOG_TARGET, "Sender {from} sent a message with output shards but was not an input shard. Ignoring message.");
                 return Ok(());
@@ -341,7 +341,7 @@ where
         let mut is_input_shard = local_committee_shard.includes_any_shard(transaction_inputs);
         // Special temporary case: if there are no input shards an output shard will also propagate. No inputs is
         // invalid, however we must support them for now because of CreateFreeTestCoin transactions.
-        is_input_shard |= transaction.inputs().len() + transaction.input_refs().len() == 0;
+        is_input_shard |= transaction.inputs().len() == 0;
         let is_output_shard = local_committee_shard.includes_any_shard(
             // Known output shards
             // This is to allow for the txreceipt output
@@ -658,7 +658,7 @@ where
             .all_inputs_iter()
             .map(|i| i.to_substate_address());
         let is_input_shard = local_committee_shard.includes_any_shard(all_inputs_iter) |
-            (executed.transaction().inputs().len() + executed.transaction().input_refs().len() == 0);
+            (executed.transaction().inputs().len() == 0);
 
         if should_propagate && is_input_shard {
             // Forward the transaction to any output shards that are not part of the input shard set as these have

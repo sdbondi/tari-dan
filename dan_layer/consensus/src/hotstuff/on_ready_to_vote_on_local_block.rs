@@ -262,8 +262,7 @@ where TConsensusSpec: ConsensusSpec
                     if t.decision.is_commit() {
                         let transaction = ExecutedTransaction::get(tx.deref_mut(), &t.id)?;
                         // Lock all inputs for the transaction as part of Prepare
-                        let is_inputs_locked =
-                            self.lock_inputs(tx, transaction.transaction(), local_committee_shard)?;
+                        let is_inputs_locked = self.lock_inputs(tx, &transaction, local_committee_shard)?;
                         let is_outputs_locked = is_inputs_locked && self.lock_outputs(tx, leaf.id(), &transaction)?;
 
                         // This should not be possible and may be due to a BUG. The failure to lock the leaf block
@@ -1001,18 +1000,21 @@ where TConsensusSpec: ConsensusSpec
     fn lock_inputs(
         &self,
         tx: &mut <TConsensusSpec::StateStore as StateStore>::WriteTransaction<'_>,
-        transaction: &Transaction,
+        transaction: &ExecutedTransaction,
         local_committee_shard: &CommitteeShard,
     ) -> Result<bool, HotStuffError> {
-        // For now we are going to only lock inputs with specific versions
-        // TODO: for inputs without version, investigate if we need to use the results of re-execution
-        let inputs: Vec<SubstateAddress> = transaction
+        let inputs = transaction
+            .transaction()
             .inputs()
             .iter()
-            .chain(transaction.filled_inputs())
-            .filter(|i| i.version().is_some())
-            .map(|i| i.to_substate_address())
-            .collect::<Vec<_>>();
+            .cloned()
+            .map(VersionedSubstateId::try_from)
+            .chain(transaction.filled_inputs().map(Ok))
+            .map(|i| i.map(|i| i.to_substate_address()))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Resolve read/write
+        // let resolved_inputs = transaction.resolve_input_locks()?;
 
         let state = SubstateRecord::try_lock_all(
             tx,
@@ -1029,14 +1031,6 @@ where TConsensusSpec: ConsensusSpec
             );
             return Ok(false);
         }
-
-        // TODO: Same as before, for inputs without version, investigate if we need to use the results of re-execution
-        let inputs: Vec<SubstateAddress> = transaction
-            .input_refs()
-            .iter()
-            .filter(|i| i.version().is_some())
-            .map(|i| i.to_substate_address())
-            .collect();
 
         let state = SubstateRecord::try_lock_all(
             tx,
@@ -1101,27 +1095,6 @@ where TConsensusSpec: ConsensusSpec
             return Ok(false);
         }
         locked_inputs.extend(inputs);
-        // TODO: Same as before, for inputs without version, investigate if we need to use the results of re-execution
-        let inputs = local_committee_shard
-            .filter(
-                transaction
-                    .input_refs()
-                    .iter()
-                    .filter(|i| i.version().is_some())
-                    .map(|i| i.to_substate_address()),
-            )
-            .collect::<HashSet<_>>();
-        let state = SubstateRecord::check_lock_all(tx, inputs.iter(), SubstateLockFlag::Read)?;
-
-        if !state.is_acquired() {
-            warn!(
-                target: LOG_TARGET,
-                "❌ Unable to read lock all input refs for transaction {}: {:?}",
-                transaction.id(),
-                state,
-            );
-            return Ok(false);
-        }
 
         debug!(
             target: LOG_TARGET,
@@ -1152,19 +1125,7 @@ where TConsensusSpec: ConsensusSpec
             local_committee_shard.filter(write_inputs.iter()),
             SubstateLockFlag::Write,
         )?;
-        // We ignore inputs without version
-        let read_inputs: Vec<SubstateAddress> = transaction
-            .input_refs()
-            .iter()
-            .filter(|i| i.version().is_some())
-            .map(|i| i.to_substate_address())
-            .collect();
-        SubstateRecord::try_unlock_many(
-            tx,
-            transaction.id(),
-            local_committee_shard.filter(read_inputs.iter()),
-            SubstateLockFlag::Read,
-        )?;
+
         Ok(())
     }
 

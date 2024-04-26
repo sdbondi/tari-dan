@@ -15,10 +15,10 @@ use tari_engine_types::{
     commit_result::{ExecuteResult, FinalizeResult, RejectReason},
     lock::LockFlag,
 };
-use tari_transaction::{Transaction, TransactionId, VersionedSubstateId};
+use tari_transaction::{Transaction, TransactionId, VersionedSubstateId, VersionedSubstateIdError};
 
 use crate::{
-    consensus_models::{Decision, Evidence, ShardEvidence, TransactionAtom, TransactionRecord},
+    consensus_models::{Decision, Evidence, ShardEvidence, SubstateLockFlag, TransactionAtom, TransactionRecord},
     StateStoreReadTransaction,
     StateStoreWriteTransaction,
     StorageError,
@@ -34,6 +34,7 @@ pub struct ExecutedTransaction {
     transaction: Transaction,
     result: ExecuteResult,
     resulting_outputs: Vec<VersionedSubstateId>,
+    resolved_inputs: Vec<VersionedSubstateIdLockIntent>,
     #[cfg_attr(feature = "ts", ts(type = "{secs: number, nanos: number}"))]
     execution_time: Duration,
     final_decision: Option<Decision>,
@@ -41,6 +42,32 @@ pub struct ExecutedTransaction {
     finalized_time: Option<Duration>,
     abort_details: Option<String>,
 }
+
+// impl ExecutedTransaction {
+//     pub fn resolve_input_locks(&self) -> Result<Vec<VersionedSubstateIdLockIntent>, VersionedSubstateIdError> {
+//
+//         let Some(diff) = self.result.finalize.accept() else {
+//             return Ok(Vec::new());
+//         };
+//
+//         let inputs = self
+//             .transaction()
+//             .inputs()
+//             .iter()
+//             .cloned()
+//             // Since this object is an executed transaction, all inputs are versioned (invariant), therefore this
+// should never fail             // TODO: improve types to enforce this invariant at compile time
+//             .map(VersionedSubstateId::try_from)
+//             // Ensure filled inputs override regular inputs by chaining this after regular inputs.
+//             .chain(self.transaction().filled_inputs().map(Ok))
+//             .map(|a| )
+//
+//             .map(|i| i.map(|i| i.to_substate_address()))
+//             .collect::<Result<IndexSet<_>, _>>()?;
+//
+//
+//     }
+// }
 
 impl ExecutedTransaction {
     pub fn new(
@@ -151,13 +178,6 @@ impl ExecutedTransaction {
             (input.to_substate_address(), ShardEvidence {
                 qc_ids: IndexSet::new(),
                 lock: LockFlag::Write,
-            })
-        }));
-
-        deduped_evidence.extend(self.transaction.input_refs().iter().map(|input_ref| {
-            (input_ref.to_substate_address(), ShardEvidence {
-                qc_ids: IndexSet::new(),
-                lock: LockFlag::Read,
             })
         }));
 
@@ -364,4 +384,15 @@ impl Hash for ExecutedTransaction {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.transaction.id().hash(state);
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../bindings/src/types/")
+)]
+pub struct VersionedSubstateIdLockIntent {
+    pub substate_id: VersionedSubstateId,
+    pub lock: SubstateLockFlag,
 }

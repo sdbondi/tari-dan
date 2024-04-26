@@ -3,6 +3,7 @@
 
 use std::{collections::HashSet, fmt::Display, str::FromStr};
 
+use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
 use tari_common_types::types::PublicKey;
 use tari_dan_common_types::{shard::Shard, Epoch, SubstateAddress};
@@ -31,12 +32,10 @@ pub struct Transaction {
     signature: TransactionSignature,
 
     // TODO: Ideally we should ensure uniqueness and ordering invariants for each set.
-    /// Input objects that may be downed by this transaction
-    inputs: Vec<SubstateRequirement>,
-    /// Input objects that must exist but cannot be downed by this transaction
-    input_refs: Vec<SubstateRequirement>,
+    /// Input objects that may be downed (write) or referenced (read) by this transaction.
+    inputs: IndexSet<SubstateRequirement>,
     /// Inputs filled by some authority. These are not part of the transaction hash nor the signature
-    filled_inputs: Vec<SubstateRequirement>,
+    filled_inputs: IndexSet<VersionedSubstateId>,
     min_epoch: Option<Epoch>,
     max_epoch: Option<Epoch>,
 }
@@ -50,9 +49,8 @@ impl Transaction {
         fee_instructions: Vec<Instruction>,
         instructions: Vec<Instruction>,
         signature: TransactionSignature,
-        inputs: Vec<SubstateRequirement>,
-        input_refs: Vec<SubstateRequirement>,
-        filled_inputs: Vec<SubstateRequirement>,
+        inputs: IndexSet<SubstateRequirement>,
+        filled_inputs: IndexSet<VersionedSubstateId>,
         min_epoch: Option<Epoch>,
         max_epoch: Option<Epoch>,
     ) -> Self {
@@ -62,7 +60,6 @@ impl Transaction {
             instructions,
             signature,
             inputs,
-            input_refs,
             filled_inputs,
             min_epoch,
             max_epoch,
@@ -114,20 +111,14 @@ impl Transaction {
     }
 
     pub fn num_involved_shards(&self) -> usize {
-        self.inputs().len() + self.input_refs().len() + self.filled_inputs().len()
+        self.inputs().len() + self.filled_inputs().len()
     }
 
     pub fn input_refs(&self) -> &[SubstateRequirement] {
         &self.input_refs
     }
 
-    pub fn input_address_refs_iter(&self) -> impl Iterator<Item = SubstateAddress> + '_ {
-        self.input_refs
-            .iter()
-            .map(|i: &SubstateRequirement| i.to_substate_address())
-    }
-
-    pub fn inputs(&self) -> &[SubstateRequirement] {
+    pub fn inputs(&self) -> &IndexSet<SubstateRequirement> {
         &self.inputs
     }
 
@@ -145,17 +136,16 @@ impl Transaction {
     pub fn all_inputs_iter(&self) -> impl Iterator<Item = &SubstateRequirement> + '_ {
         self.inputs()
             .iter()
-            .chain(self.input_refs())
+            // Filled inputs override other inputs as they are likely filled with versions
+            .filter(|i| self.filled_inputs().iter().all(|fi| fi.substate_id() != i.substate_id()))
             .chain(self.filled_inputs())
     }
 
     pub fn all_input_addresses_iter(&self) -> impl Iterator<Item = SubstateAddress> + '_ {
-        self.input_addresses_iter()
-            .chain(self.input_address_refs_iter())
-            .chain(self.filled_input_addresses_iter())
+        self.input_addresses_iter().chain(self.filled_input_addresses_iter())
     }
 
-    pub fn filled_inputs(&self) -> &[SubstateRequirement] {
+    pub fn filled_inputs(&self) -> &IndexSet<VersionedSubstateId> {
         &self.filled_inputs
     }
 
@@ -165,7 +155,7 @@ impl Transaction {
             .map(|i: &SubstateRequirement| i.to_substate_address())
     }
 
-    pub fn filled_inputs_mut(&mut self) -> &mut Vec<SubstateRequirement> {
+    pub fn filled_inputs_mut(&mut self) -> &mut IndexSet<VersionedSubstateId> {
         &mut self.filled_inputs
     }
 
@@ -346,7 +336,7 @@ impl From<VersionedSubstateId> for SubstateRequirement {
 #[error("Failed to parse substate requirement {0}")]
 pub struct SubstateRequirementParseError(String);
 
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg_attr(
     feature = "ts",
     derive(ts_rs::TS),
@@ -411,4 +401,39 @@ impl Display for VersionedSubstateId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.substate_id, self.version)
     }
+}
+
+impl TryFrom<SubstateRequirement> for VersionedSubstateId {
+    type Error = VersionedSubstateIdError;
+
+    fn try_from(value: SubstateRequirement) -> Result<Self, Self::Error> {
+        match value.version {
+            Some(v) => Ok(Self::new(value.substate_id, v)),
+            None => Err(VersionedSubstateIdError::SubstateRequirementNotVersioned(
+                value.substate_id,
+            )),
+        }
+    }
+}
+
+// Only consider the substate id in maps. This means that duplicates found if the substate id is the same regardless of
+// the version.
+impl std::hash::Hash for VersionedSubstateId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.substate_id.hash(state);
+    }
+}
+
+impl PartialEq for VersionedSubstateId {
+    fn eq(&self, other: &Self) -> bool {
+        self.substate_id == other.substate_id
+    }
+}
+
+impl Eq for VersionedSubstateId {}
+
+#[derive(Debug, thiserror::Error)]
+pub enum VersionedSubstateIdError {
+    #[error("Substate requirement {0} is not versioned")]
+    SubstateRequirementNotVersioned(SubstateId),
 }

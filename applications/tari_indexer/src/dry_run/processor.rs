@@ -155,7 +155,7 @@ where TSubstateCache: SubstateCache + 'static
     ) -> Result<HashMap<SubstateId, Substate>, DryRunTransactionProcessorError> {
         let mut substates = HashMap::new();
 
-        for address in transaction.inputs().iter().chain(transaction.input_refs()) {
+        for address in transaction.inputs().iter() {
             // If the input has been filled, we've already fetched the substate
             if transaction.filled_inputs().contains(address) {
                 continue;

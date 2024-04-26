@@ -3,6 +3,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use futures::{stream::FuturesOrdered, StreamExt};
 use log::*;
 use tari_dan_common_types::NodeAddressable;
 use tari_engine_types::{
@@ -10,7 +11,7 @@ use tari_engine_types::{
     substate::{Substate, SubstateId},
 };
 use tari_epoch_manager::EpochManagerReader;
-use tari_transaction::{SubstateRequirement, Transaction};
+use tari_transaction::{SubstateRequirement, Transaction, VersionedSubstateId};
 use tari_validator_node_rpc::client::{SubstateResult, ValidatorNodeClientFactory};
 use tokio::task::JoinError;
 
@@ -58,33 +59,27 @@ where
         let mut autofilled_transaction = original_transaction;
 
         // scan the network in parallel to fetch all the substates for each required input
-        let mut input_shards = vec![];
+        let mut versioned_inputs = vec![];
         let mut found_substates = HashMap::new();
         let substate_scanner_ref = self.substate_scanner.clone();
         let transaction_ref = Arc::new(autofilled_transaction.clone());
-        let mut handles = Vec::new();
+        let mut tasks = FuturesOrdered::new();
         for requirement in &substate_requirements {
-            let handle = tokio::spawn(get_substate_requirement(
+            tasks.push_back(get_substate_requirement(
                 substate_scanner_ref.clone(),
                 transaction_ref.clone(),
                 requirement.clone(),
             ));
-            handles.push(handle);
         }
-        for handle in handles {
-            let res = handle.await??;
-            if let Some((address, substate)) = res {
-                let shard = SubstateRequirement::new(address.clone(), Some(substate.version()));
-                if autofilled_transaction.input_refs().contains(&shard) {
-                    // Shard is already an input as a ref
-                    continue;
-                }
-                input_shards.push(shard);
+        while let Some(result) = tasks.next().await {
+            if let Some((address, substate)) = result? {
+                let versioned_substate_id = VersionedSubstateId::new(address.clone(), substate.version());
+                versioned_inputs.push(versioned_substate_id);
                 found_substates.insert(address, substate);
             }
         }
         info!(target: LOG_TARGET, "✏️️ Found {} input substates", found_substates.len());
-        autofilled_transaction.filled_inputs_mut().extend(input_shards);
+        autofilled_transaction.filled_inputs_mut().extend(versioned_inputs);
 
         // let mut found_this_round = 0;
 

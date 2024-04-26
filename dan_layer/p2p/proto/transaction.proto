@@ -23,10 +23,9 @@ message Transaction {
   repeated Instruction instructions = 2;
   tari.dan.common.SignatureAndPublicKey signature = 3;
   repeated SubstateRequirement inputs = 4;
-  repeated SubstateRequirement input_refs = 5;
-  repeated SubstateRequirement filled_inputs = 7;
-  tari.dan.common.Epoch min_epoch = 8;
-  tari.dan.common.Epoch max_epoch = 9;
+  repeated SubstateRequirement filled_inputs = 5;
+  tari.dan.common.Epoch min_epoch = 6;
+  tari.dan.common.Epoch max_epoch = 7;
 }
 
 message Instruction {

@@ -565,7 +565,6 @@ impl<'tx, TAddr: NodeAddressable + 'tx> StateStoreWriteTransaction for SqliteSta
             transactions::instructions.eq(serialize_json(transaction.instructions())?),
             transactions::signature.eq(serialize_json(transaction.signature())?),
             transactions::inputs.eq(serialize_json(transaction.inputs())?),
-            transactions::input_refs.eq(serialize_json(transaction.input_refs())?),
             transactions::filled_inputs.eq(serialize_json(transaction.filled_inputs())?),
             transactions::resulting_outputs.eq(serialize_json(&serde_json::Value::Array(vec![]))?),
         );
@@ -650,7 +649,7 @@ impl<'tx, TAddr: NodeAddressable + 'tx> StateStoreWriteTransaction for SqliteSta
                     transactions::instructions.eq(serialize_json(transaction.instructions())?),
                     transactions::signature.eq(serialize_json(transaction.signature())?),
                     transactions::inputs.eq(serialize_json(transaction.inputs())?),
-                    transactions::input_refs.eq(serialize_json(transaction.input_refs())?),
+                    transactions::resolved_inputs.eq(rec.resolved_inputs().map(serialize_json).transpose()?),
                     transactions::filled_inputs.eq(serialize_json(transaction.filled_inputs())?),
                     transactions::resulting_outputs.eq(serialize_json(rec.resulting_outputs())?),
                     transactions::result.eq(rec.result().map(serialize_json).transpose()?),

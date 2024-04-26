@@ -7,13 +7,14 @@ use std::{
     time::Duration,
 };
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use tari_dan_common_types::SubstateAddress;
 use tari_engine_types::commit_result::{ExecuteResult, FinalizeResult, RejectReason};
 use tari_transaction::{Transaction, TransactionId, VersionedSubstateId};
 
 use crate::{
-    consensus_models::{Decision, ExecutedTransaction},
+    consensus_models::{Decision, ExecutedTransaction, VersionedSubstateIdLockIntent},
     Ordering,
     StateStoreReadTransaction,
     StateStoreWriteTransaction,
@@ -93,6 +94,10 @@ impl TransactionRecord {
 
     pub fn resulting_outputs(&self) -> &[VersionedSubstateId] {
         &self.resulting_outputs
+    }
+
+    pub fn resolved_inputs(&self) -> Option<&IndexMap<VersionedSubstateIdLockIntent>> {
+        unimplemented!()
     }
 
     pub fn final_decision(&self) -> Option<Decision> {
