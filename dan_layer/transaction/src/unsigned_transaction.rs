@@ -30,8 +30,8 @@ impl From<&Transaction> for UnsignedTransaction {
         Self {
             fee_instructions: tx.fee_instructions().to_vec(),
             instructions: tx.instructions().to_vec(),
-            inputs: tx.inputs(),
-            filled_inputs: tx.filled_inputs(),
+            inputs: tx.inputs().clone(),
+            filled_inputs: tx.filled_inputs().clone(),
             min_epoch: tx.min_epoch(),
             max_epoch: tx.max_epoch(),
         }

@@ -120,15 +120,7 @@ where
                         id,
                         substate.version()
                     );
-                    let substate_requirement = SubstateRequirement::new(id.clone(), Some(substate.version()));
-                    if autofilled_transaction
-                        .all_inputs_iter()
-                        .any(|s| *s == substate_requirement)
-                    {
-                        // Shard is already an input (TODO: what a waste)
-                        continue;
-                    }
-                    autofilled_inputs.push(SubstateRequirement::new(id, Some(substate.version())));
+                    autofilled_inputs.push(VersionedSubstateId::new(id, substate.version()));
                     found_substates.insert(address, substate);
                 //       found_this_round += 1;
                 } else {
@@ -160,14 +152,16 @@ where
     TAddr: NodeAddressable,
     TSubstateCache: SubstateCache,
 {
+    if transaction
+        .all_inputs_iter()
+        .any(|s| s.version.is_some() && s.substate_id == *req.substate_id())
+    {
+        // Input for this substate has a specified version, so we do not autofill it
+        return Ok(None);
+    }
+
     let mut version = req.version().unwrap_or(0);
     loop {
-        let shard = SubstateRequirement::new(req.substate_id().clone(), Some(version));
-        if transaction.all_inputs_iter().any(|s| *s == shard) {
-            // Shard is already an input
-            return Ok(None);
-        }
-
         let scan_res = substate_scanner.get_substate(req.substate_id(), Some(version)).await?;
 
         match scan_res {
@@ -182,11 +176,6 @@ where
                     id,
                     substate.version()
                 );
-                let shard = SubstateRequirement::new(req.substate_id().clone(), Some(version));
-                if transaction.all_inputs_iter().any(|s| *s == shard) {
-                    // Shard is already an input (TODO: what a waste)
-                    return Ok(None);
-                }
 
                 return Ok(Some((id, substate)));
             },

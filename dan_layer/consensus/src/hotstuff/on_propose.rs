@@ -355,7 +355,7 @@ fn transaction_pool_record_to_command<TTx: StateStoreReadTransaction>(
     local_committee_shard: &CommitteeShard,
     substate_changes: &mut Vec<SubstateChange>,
 ) -> Result<Command, HotStuffError> {
-    let involved = local_committee_shard.count_distinct_shards(t.transaction().evidence.shards_iter());
+    let involved = local_committee_shard.count_distinct_shards(t.transaction().evidence.substate_addresses_iter());
     if involved == 1 {
         info!(
             target: LOG_TARGET,

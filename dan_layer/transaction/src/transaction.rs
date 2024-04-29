@@ -1,7 +1,7 @@
 //   Copyright 2023 The Tari Project
 //   SPDX-License-Identifier: BSD-3-Clause
 
-use std::{collections::HashSet, fmt::Display, str::FromStr};
+use std::{borrow::Borrow, collections::HashSet, fmt::Display, str::FromStr};
 
 use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
@@ -74,7 +74,6 @@ impl Transaction {
             .chain(&self.fee_instructions)
             .chain(&self.instructions)
             .chain(&self.inputs)
-            .chain(&self.input_refs)
             .chain(&self.min_epoch)
             .chain(&self.max_epoch)
             .result()
@@ -110,14 +109,6 @@ impl Transaction {
         self.all_input_addresses_iter()
     }
 
-    pub fn num_involved_shards(&self) -> usize {
-        self.inputs().len() + self.filled_inputs().len()
-    }
-
-    pub fn input_refs(&self) -> &[SubstateRequirement] {
-        &self.input_refs
-    }
-
     pub fn inputs(&self) -> &IndexSet<SubstateRequirement> {
         &self.inputs
     }
@@ -125,7 +116,7 @@ impl Transaction {
     fn input_addresses_iter(&self) -> impl Iterator<Item = SubstateAddress> + '_ {
         self.inputs
             .iter()
-            .map(|i: &SubstateRequirement| i.to_substate_address())
+            .filter_map(|i: &SubstateRequirement| i.to_substate_address())
     }
 
     /// Returns (fee instructions, instructions)
@@ -133,12 +124,26 @@ impl Transaction {
         (self.fee_instructions, self.instructions)
     }
 
-    pub fn all_inputs_iter(&self) -> impl Iterator<Item = &SubstateRequirement> + '_ {
+    pub fn all_inputs_iter(&self) -> impl Iterator<Item = SubstateRequirement> + '_ {
         self.inputs()
             .iter()
             // Filled inputs override other inputs as they are likely filled with versions
             .filter(|i| self.filled_inputs().iter().all(|fi| fi.substate_id() != i.substate_id()))
-            .chain(self.filled_inputs())
+            .cloned()
+            .chain(self.filled_inputs().iter().cloned().map(Into::into))
+    }
+
+    pub fn all_inputs_substate_ids_iter(&self) -> impl Iterator<Item = &SubstateId> + '_ {
+        self.inputs()
+            .iter()
+            // Filled inputs override other inputs as they are likely filled with versions
+            .filter(|i| self.filled_inputs().iter().all(|fi| fi.substate_id() != i.substate_id()))
+            .map(|i| i.substate_id())
+            .chain(self.filled_inputs().iter().map(|fi| fi.substate_id()))
+    }
+
+    pub fn num_unique_inputs(&self) -> usize {
+        self.all_inputs_substate_ids_iter().count()
     }
 
     pub fn all_input_addresses_iter(&self) -> impl Iterator<Item = SubstateAddress> + '_ {
@@ -150,9 +155,7 @@ impl Transaction {
     }
 
     fn filled_input_addresses_iter(&self) -> impl Iterator<Item = SubstateAddress> + '_ {
-        self.filled_inputs
-            .iter()
-            .map(|i: &SubstateRequirement| i.to_substate_address())
+        self.filled_inputs.iter().map(|i| i.to_substate_address())
     }
 
     pub fn filled_inputs_mut(&mut self) -> &mut IndexSet<VersionedSubstateId> {
@@ -231,7 +234,7 @@ impl Transaction {
     }
 
     pub fn has_inputs_without_version(&self) -> bool {
-        self.all_inputs_iter().any(|i| i.version().is_none())
+        self.inputs().iter().any(|i| i.version().is_none())
     }
 }
 
@@ -270,15 +273,15 @@ impl SubstateRequirement {
         self.version
     }
 
-    pub fn to_substate_address(&self) -> SubstateAddress {
-        // TODO: properly handle the the no-version case
-        SubstateAddress::from_address(self.substate_id(), self.version().unwrap_or_default())
+    pub fn to_substate_address(&self) -> Option<SubstateAddress> {
+        Some(SubstateAddress::from_address(self.substate_id(), self.version()?))
     }
 
     /// Calculates and returns the shard number that this SubstateAddress belongs.
-    /// A shard is an equal division of the 256-bit shard space.
-    pub fn to_committee_shard(&self, num_committees: u32) -> Shard {
-        self.to_substate_address().to_committee_shard(num_committees)
+    /// A shard is a division of the 256-bit shard space.
+    /// If the substate version is not known, None is returned.
+    pub fn to_committee_shard(&self, num_committees: u32) -> Option<Shard> {
+        Some(self.to_substate_address()?.to_committee_shard(num_committees))
     }
 
     pub fn to_versioned(&self) -> Option<VersionedSubstateId> {
@@ -432,8 +435,29 @@ impl PartialEq for VersionedSubstateId {
 
 impl Eq for VersionedSubstateId {}
 
+impl Borrow<SubstateId> for VersionedSubstateId {
+    fn borrow(&self) -> &SubstateId {
+        &self.substate_id
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum VersionedSubstateIdError {
     #[error("Substate requirement {0} is not versioned")]
     SubstateRequirementNotVersioned(SubstateId),
+}
+
+#[cfg(test)]
+mod tests {
+    use tari_template_lib::models::ObjectKey;
+
+    use super::*;
+
+    #[test]
+    fn it_hashes_identically_to_a_substate_id() {
+        let substate_id = SubstateId::Component(ComponentAddress::new(ObjectKey::default()));
+        let mut set = IndexSet::new();
+        set.extend([VersionedSubstateId::new(substate_id.clone(), 0)]);
+        assert!(set.contains(&substate_id));
+    }
 }

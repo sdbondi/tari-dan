@@ -93,7 +93,6 @@ use crate::{
                 FeeTransactionValidator,
                 HasInputs,
                 HasInvolvedShards,
-                InputRefsValidator,
                 MempoolError,
                 MempoolHandle,
                 OutputsDontExistLocally,

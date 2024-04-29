@@ -178,7 +178,7 @@ where TConsensusSpec: ConsensusSpec
             .with_write_tx(|tx| tx.missing_transactions_remove(current_height, transaction_id))?;
 
         if let Some(unparked_block) = maybe_unparked_block {
-            info!(target: LOG_TARGET, "♻️ all transactions for block {unparked_block} have been executed");
+            info!(target: LOG_TARGET, "♻️ all transactions for block {unparked_block} are ready for consensus");
 
             let vn = self
                 .epoch_manager

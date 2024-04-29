@@ -23,45 +23,45 @@ pub fn build_transaction_from(
     resulting_outputs: Vec<VersionedSubstateId>,
 ) -> ExecutedTransaction {
     let tx_id = *tx.id();
-    ExecutedTransaction::new(
+    let result = if decision.is_commit() {
+        let mut diff = SubstateDiff::new();
+        for output in &resulting_outputs {
+            let s = (0..100).map(|_| OsRng.sample(Alphanumeric) as char).collect::<String>();
+            let random_state = tari_bor::to_value(&s).unwrap();
+            diff.up(
+                output.substate_id.clone(),
+                Substate::new(0, ComponentHeader {
+                    template_address: Default::default(),
+                    module_name: "Test".to_string(),
+                    owner_key: Default::default(),
+                    owner_rule: Default::default(),
+                    access_rules: Default::default(),
+                    entity_id: output.substate_id.as_component_address().unwrap().entity_id(),
+                    body: ComponentBody { state: random_state },
+                }),
+            )
+        }
+        TransactionResult::Accept(diff)
+    } else {
+        TransactionResult::Reject(RejectReason::ExecutionFailure("Test failure".to_string()))
+    };
+
+    let mut tx = ExecutedTransaction::new(
         tx,
         ExecuteResult {
-            finalize: FinalizeResult::new(
-                tx_id.into_array().into(),
-                vec![],
-                vec![],
-                if decision.is_commit() {
-                    let mut diff = SubstateDiff::new();
-                    for output in &resulting_outputs {
-                        let s = (0..100).map(|_| OsRng.sample(Alphanumeric) as char).collect::<String>();
-                        let random_state = tari_bor::to_value(&s).unwrap();
-                        diff.up(
-                            output.substate_id.clone(),
-                            Substate::new(0, ComponentHeader {
-                                template_address: Default::default(),
-                                module_name: "Test".to_string(),
-                                owner_key: Default::default(),
-                                owner_rule: Default::default(),
-                                access_rules: Default::default(),
-                                entity_id: output.substate_id.as_component_address().unwrap().entity_id(),
-                                body: ComponentBody { state: random_state },
-                            }),
-                        )
-                    }
-                    TransactionResult::Accept(diff)
-                } else {
-                    TransactionResult::Reject(RejectReason::ExecutionFailure("Test failure".to_string()))
-                },
-                FeeReceipt {
-                    total_fee_payment: fee.try_into().unwrap(),
-                    total_fees_paid: fee.try_into().unwrap(),
-                    cost_breakdown: vec![],
-                },
-            ),
+            finalize: FinalizeResult::new(tx_id.into_array().into(), vec![], vec![], result, FeeReceipt {
+                total_fee_payment: fee.try_into().unwrap(),
+                total_fees_paid: fee.try_into().unwrap(),
+                cost_breakdown: vec![],
+            }),
         },
         resulting_outputs,
         Duration::from_secs(0),
-    )
+    );
+
+    // No inputs in tests
+    tx.set_resolved_inputs(Default::default());
+    tx
 }
 
 pub fn build_transaction(decision: Decision, fee: u64, num_shards: usize, num_committees: u32) -> ExecutedTransaction {

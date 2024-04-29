@@ -23,7 +23,7 @@ message Transaction {
   repeated Instruction instructions = 2;
   tari.dan.common.SignatureAndPublicKey signature = 3;
   repeated SubstateRequirement inputs = 4;
-  repeated SubstateRequirement filled_inputs = 5;
+  repeated VersionedSubstateId filled_inputs = 5;
   tari.dan.common.Epoch min_epoch = 6;
   tari.dan.common.Epoch max_epoch = 7;
 }
@@ -92,6 +92,11 @@ message SubstateRequirement {
 
 message OptionalVersion {
   uint32 version = 1;
+}
+
+message VersionedSubstateId {
+  bytes substate_id = 1;
+  uint32 version = 2;
 }
 
 message ConfidentialWithdrawProof {

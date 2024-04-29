@@ -346,16 +346,12 @@ impl TestNetworkWorker {
             .get(&from)
             .unwrap_or_else(|| panic!("No new transaction channel for {}", from));
 
-        // In the normal case, we need to provide the same execution results to consensus. In future we could add code
+        // In the normal case, we need to provide the same execution results to consensus. In future, we could add code
         // here to make a local decision to ABORT.
         let existing_executed_tx = self.transaction_store.read().await.get(msg.id()).unwrap().clone();
         state_store
             .with_write_tx(|tx| {
                 existing_executed_tx.upsert(tx)?;
-                let pool = TransactionPool::<SqliteStateStore<TestAddress>>::new();
-                if !pool.exists(tx, existing_executed_tx.id())? {
-                    pool.insert(tx, existing_executed_tx.to_atom())?;
-                }
                 Ok::<_, anyhow::Error>(())
             })
             .unwrap();

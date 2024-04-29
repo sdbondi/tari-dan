@@ -9070,6 +9070,7 @@ dependencies = [
  "config",
  "dashmap",
  "futures 0.3.30",
+ "indexmap 2.2.6",
  "json5",
  "libp2p-identity",
  "log",

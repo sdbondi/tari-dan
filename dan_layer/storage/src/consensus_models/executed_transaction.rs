@@ -15,7 +15,7 @@ use tari_engine_types::{
     commit_result::{ExecuteResult, FinalizeResult, RejectReason},
     lock::LockFlag,
 };
-use tari_transaction::{Transaction, TransactionId, VersionedSubstateId, VersionedSubstateIdError};
+use tari_transaction::{Transaction, TransactionId, VersionedSubstateId};
 
 use crate::{
     consensus_models::{Decision, Evidence, ShardEvidence, SubstateLockFlag, TransactionAtom, TransactionRecord},
@@ -34,7 +34,7 @@ pub struct ExecutedTransaction {
     transaction: Transaction,
     result: ExecuteResult,
     resulting_outputs: Vec<VersionedSubstateId>,
-    resolved_inputs: Vec<VersionedSubstateIdLockIntent>,
+    resolved_inputs: Option<IndexSet<VersionedSubstateIdLockIntent>>,
     #[cfg_attr(feature = "ts", ts(type = "{secs: number, nanos: number}"))]
     execution_time: Duration,
     final_decision: Option<Decision>,
@@ -42,32 +42,6 @@ pub struct ExecutedTransaction {
     finalized_time: Option<Duration>,
     abort_details: Option<String>,
 }
-
-// impl ExecutedTransaction {
-//     pub fn resolve_input_locks(&self) -> Result<Vec<VersionedSubstateIdLockIntent>, VersionedSubstateIdError> {
-//
-//         let Some(diff) = self.result.finalize.accept() else {
-//             return Ok(Vec::new());
-//         };
-//
-//         let inputs = self
-//             .transaction()
-//             .inputs()
-//             .iter()
-//             .cloned()
-//             // Since this object is an executed transaction, all inputs are versioned (invariant), therefore this
-// should never fail             // TODO: improve types to enforce this invariant at compile time
-//             .map(VersionedSubstateId::try_from)
-//             // Ensure filled inputs override regular inputs by chaining this after regular inputs.
-//             .chain(self.transaction().filled_inputs().map(Ok))
-//             .map(|a| )
-//
-//             .map(|i| i.map(|i| i.to_substate_address()))
-//             .collect::<Result<IndexSet<_>, _>>()?;
-//
-//
-//     }
-// }
 
 impl ExecutedTransaction {
     pub fn new(
@@ -78,6 +52,7 @@ impl ExecutedTransaction {
     ) -> Self {
         Self {
             transaction,
+            resolved_inputs: None,
             result,
             execution_time,
             resulting_outputs,
@@ -123,15 +98,22 @@ impl ExecutedTransaction {
         &self.result
     }
 
+    pub fn all_inputs_iter(&self) -> impl Iterator<Item = &VersionedSubstateId> + '_ {
+        self.resolved_inputs
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .map(|input| &input.versioned_substate_id)
+    }
+
     pub fn involved_shards_iter(&self) -> impl Iterator<Item = SubstateAddress> + '_ {
-        self.transaction
-            .all_inputs_iter()
+        self.all_inputs_iter()
             .map(|input| input.to_substate_address())
             .chain(self.resulting_outputs.iter().map(|output| output.to_substate_address()))
     }
 
-    pub fn num_involved_shards(&self) -> usize {
-        self.transaction.num_involved_shards() + self.resulting_outputs.len()
+    pub fn num_inputs_and_outputs(&self) -> usize {
+        self.transaction.num_unique_inputs() + self.resulting_outputs.len()
     }
 
     pub fn into_final_result(self) -> Option<ExecuteResult> {
@@ -168,23 +150,25 @@ impl ExecutedTransaction {
         &self.resulting_outputs
     }
 
+    pub fn resolved_inputs(&self) -> Option<&IndexSet<VersionedSubstateIdLockIntent>> {
+        self.resolved_inputs.as_ref()
+    }
+
+    pub fn set_resolved_inputs(&mut self, resolved_inputs: IndexSet<VersionedSubstateIdLockIntent>) -> &mut Self {
+        self.resolved_inputs = Some(resolved_inputs);
+        self
+    }
+
     pub fn dissolve(self) -> (Transaction, ExecuteResult) {
         (self.transaction, self.result)
     }
 
     pub fn to_initial_evidence(&self) -> Evidence {
         let mut deduped_evidence = HashMap::new();
-        deduped_evidence.extend(self.transaction.inputs().iter().map(|input| {
+        deduped_evidence.extend(self.resolved_inputs.iter().flatten().map(|input| {
             (input.to_substate_address(), ShardEvidence {
                 qc_ids: IndexSet::new(),
-                lock: LockFlag::Write,
-            })
-        }));
-
-        deduped_evidence.extend(self.transaction.filled_inputs().iter().map(|input_ref| {
-            (input_ref.to_substate_address(), ShardEvidence {
-                qc_ids: IndexSet::new(),
-                lock: LockFlag::Write,
+                lock: input.lock_flag().as_lock_flag(),
             })
         }));
 
@@ -364,6 +348,7 @@ impl TryFrom<TransactionRecord> for ExecutedTransaction {
             transaction: value.transaction,
             result: value.result.unwrap(),
             execution_time: value.execution_time.unwrap_or_default(),
+            resolved_inputs: value.resolved_inputs,
             final_decision: value.final_decision,
             finalized_time: value.finalized_time,
             resulting_outputs: value.resulting_outputs,
@@ -386,13 +371,34 @@ impl Hash for ExecutedTransaction {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
 #[cfg_attr(
     feature = "ts",
     derive(ts_rs::TS),
     ts(export, export_to = "../../bindings/src/types/")
 )]
 pub struct VersionedSubstateIdLockIntent {
-    pub substate_id: VersionedSubstateId,
-    pub lock: SubstateLockFlag,
+    versioned_substate_id: VersionedSubstateId,
+    lock_flag: SubstateLockFlag,
+}
+
+impl VersionedSubstateIdLockIntent {
+    pub fn new(versioned_substate_id: VersionedSubstateId, lock: SubstateLockFlag) -> Self {
+        Self {
+            versioned_substate_id,
+            lock_flag: lock,
+        }
+    }
+
+    pub fn to_substate_address(&self) -> SubstateAddress {
+        self.versioned_substate_id.to_substate_address()
+    }
+
+    pub fn versioned_substate_id(&self) -> &VersionedSubstateId {
+        &self.versioned_substate_id
+    }
+
+    pub fn lock_flag(&self) -> SubstateLockFlag {
+        self.lock_flag
+    }
 }

@@ -7,26 +7,37 @@ use std::{
     time::Duration,
 };
 
-use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
+use indexmap::IndexSet;
+use serde::Deserialize;
 use tari_dan_common_types::SubstateAddress;
-use tari_engine_types::commit_result::{ExecuteResult, FinalizeResult, RejectReason};
+use tari_engine_types::{
+    commit_result::{ExecuteResult, FinalizeResult, RejectReason},
+    lock::LockFlag,
+};
 use tari_transaction::{Transaction, TransactionId, VersionedSubstateId};
 
 use crate::{
-    consensus_models::{Decision, ExecutedTransaction, VersionedSubstateIdLockIntent},
+    consensus_models::{
+        Decision,
+        Evidence,
+        ExecutedTransaction,
+        ShardEvidence,
+        TransactionAtom,
+        VersionedSubstateIdLockIntent,
+    },
     Ordering,
     StateStoreReadTransaction,
     StateStoreWriteTransaction,
     StorageError,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TransactionRecord {
     pub transaction: Transaction,
     pub result: Option<ExecuteResult>,
     pub execution_time: Option<Duration>,
     pub resulting_outputs: Vec<VersionedSubstateId>,
+    pub resolved_inputs: Option<IndexSet<VersionedSubstateIdLockIntent>>,
     pub final_decision: Option<Decision>,
     pub finalized_time: Option<Duration>,
     pub abort_details: Option<String>,
@@ -37,6 +48,7 @@ impl TransactionRecord {
         Self {
             transaction,
             result: None,
+            resolved_inputs: None,
             execution_time: None,
             final_decision: None,
             finalized_time: None,
@@ -48,6 +60,7 @@ impl TransactionRecord {
     pub fn load(
         transaction: Transaction,
         result: Option<ExecuteResult>,
+        resolved_inputs: Option<IndexSet<VersionedSubstateIdLockIntent>>,
         execution_time: Option<Duration>,
         final_decision: Option<Decision>,
         finalized_time: Option<Duration>,
@@ -56,6 +69,7 @@ impl TransactionRecord {
     ) -> Self {
         Self {
             transaction,
+            resolved_inputs,
             result,
             execution_time,
             final_decision,
@@ -85,19 +99,16 @@ impl TransactionRecord {
         self.result.as_ref()
     }
 
-    pub fn involved_shards_iter(&self) -> impl Iterator<Item = SubstateAddress> + '_ {
-        self.transaction
-            .all_inputs_iter()
-            .map(|requirement| requirement.to_substate_address())
-            .chain(self.resulting_outputs.iter().map(|output| output.to_substate_address()))
+    pub fn has_executed(&self) -> bool {
+        self.result.is_some()
     }
 
     pub fn resulting_outputs(&self) -> &[VersionedSubstateId] {
         &self.resulting_outputs
     }
 
-    pub fn resolved_inputs(&self) -> Option<&IndexMap<VersionedSubstateIdLockIntent>> {
-        unimplemented!()
+    pub fn resolved_inputs(&self) -> Option<&IndexSet<VersionedSubstateIdLockIntent>> {
+        self.resolved_inputs.as_ref()
     }
 
     pub fn final_decision(&self) -> Option<Decision> {
@@ -224,25 +235,64 @@ impl TransactionRecord {
         tx.transactions_get_paginated(limit, offset, ordering)
     }
 
-    pub fn get_involved_shards<'a, TTx: StateStoreReadTransaction, I: IntoIterator<Item = &'a TransactionId>>(
-        tx: &mut TTx,
-        transactions: I,
-    ) -> Result<HashMap<TransactionId, HashSet<SubstateAddress>>, StorageError> {
-        let (transactions, missing) = Self::get_any(tx, transactions)?;
-        if !missing.is_empty() {
-            return Err(StorageError::NotFound {
-                item: "ExecutedTransactions".to_string(),
-                key: missing
-                    .into_iter()
-                    .map(|id| id.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            });
+    pub fn to_atom(&self) -> TransactionAtom {
+        if let Some(result) = self.result() {
+            let decision = if result.finalize.result.is_accept() {
+                Decision::Commit
+            } else {
+                Decision::Abort
+            };
+
+            TransactionAtom {
+                id: *self.id(),
+                decision,
+                evidence: self.to_initial_evidence(),
+                transaction_fee: result
+                    .finalize
+                    .fee_receipt
+                    .total_fees_paid()
+                    .as_u64_checked()
+                    .unwrap_or(0),
+                // We calculate the leader fee later depending on the epoch of the block
+                leader_fee: None,
+            }
+        } else {
+            // Deferred
+            TransactionAtom {
+                id: *self.transaction.id(),
+                decision: Decision::Deferred,
+                evidence: Default::default(),
+                transaction_fee: 0,
+                leader_fee: None,
+            }
         }
-        Ok(transactions
-            .into_iter()
-            .map(|t| (*t.transaction.id(), t.involved_shards_iter().collect()))
-            .collect())
+    }
+
+    fn to_initial_evidence(&self) -> Evidence {
+        let mut deduped_evidence = HashMap::new();
+        deduped_evidence.extend(self.resolved_inputs.iter().flatten().map(|input| {
+            (input.to_substate_address(), ShardEvidence {
+                qc_ids: IndexSet::new(),
+                lock: input.lock_flag().as_lock_flag(),
+            })
+        }));
+
+        let tx_reciept_address = SubstateAddress::for_transaction_receipt(self.id().into_receipt_address());
+        deduped_evidence.extend(
+            self.resulting_outputs
+                    .iter()
+                    .map(|output| output.to_substate_address())
+                    // Exclude transaction receipt address from evidence since all involved shards will commit it
+                    .filter(|output| *output != tx_reciept_address)
+                    .map(|output| {
+                        (output, ShardEvidence {
+                            qc_ids: IndexSet::new(),
+                            lock: LockFlag::Write,
+                        })
+                    }),
+        );
+
+        deduped_evidence.into_iter().collect()
     }
 }
 
@@ -253,12 +303,14 @@ impl From<ExecutedTransaction> for TransactionRecord {
         let finalized_time = tx.finalized_time();
         let abort_details = tx.abort_details().cloned();
         let resulting_outputs = tx.resulting_outputs().to_vec();
+        let resolved_inputs = tx.resolved_inputs().cloned();
         let (transaction, result) = tx.dissolve();
 
         Self {
             transaction,
             result: Some(result),
             execution_time: Some(execution_time),
+            resolved_inputs,
             final_decision,
             finalized_time,
             resulting_outputs,

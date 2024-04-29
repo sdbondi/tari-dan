@@ -167,6 +167,15 @@ impl<TStateStore: StateStore> TransactionPool<TStateStore> {
         Ok(())
     }
 
+    pub fn set_atom(
+        &self,
+        tx: &mut TStateStore::WriteTransaction<'_>,
+        transaction: TransactionAtom,
+    ) -> Result<(), TransactionPoolError> {
+        tx.transaction_pool_set_atom(transaction)?;
+        Ok(())
+    }
+
     pub fn get_batch_for_next_block(
         &self,
         tx: &mut TStateStore::ReadTransaction<'_>,
@@ -274,6 +283,10 @@ impl TransactionPoolRecord {
             .unwrap_or(self.original_decision())
     }
 
+    pub fn is_deferred(&self) -> bool {
+        self.original_decision().is_deferred()
+    }
+
     pub fn current_local_decision(&self) -> Decision {
         self.local_decision().unwrap_or(self.original_decision())
     }
@@ -366,13 +379,7 @@ impl TransactionPoolRecord {
 
     pub fn set_remote_decision(&mut self, decision: Decision) -> &mut Self {
         // Only set remote_decision to ABORT, or COMMIT if it is not already ABORT
-        self.remote_decision = self
-            .remote_decision()
-            .map(|d| match d {
-                Decision::Commit => decision,
-                Decision::Abort => Decision::Abort,
-            })
-            .or(Some(decision));
+        self.remote_decision = self.remote_decision().map(|d| d.and(decision)).or(Some(decision));
         self
     }
 
@@ -383,8 +390,8 @@ impl TransactionPoolRecord {
 
     pub fn add_evidence(&mut self, committee_shard: &CommitteeShard, qc_id: QcId) -> &mut Self {
         let evidence = &mut self.transaction.evidence;
-        for (shard, evidence_mut) in evidence.iter_mut() {
-            if committee_shard.includes_substate_address(shard) {
+        for (address, evidence_mut) in evidence.iter_mut() {
+            if committee_shard.includes_substate_address(address) {
                 evidence_mut.qc_ids.insert(qc_id);
             }
         }
