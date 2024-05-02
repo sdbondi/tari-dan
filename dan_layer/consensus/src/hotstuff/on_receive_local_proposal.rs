@@ -241,14 +241,28 @@ impl<TConsensusSpec: ConsensusSpec> OnReceiveLocalProposalHandler<TConsensusSpec
 
             let (transactions, _missing) = TransactionRecord::get_any(tx.deref_mut(), &proposal.transactions)?;
             for transaction in transactions {
+                // TODO: this doesnt look correct: the pool stage should never be new or prepared if the transaction is
+                //       finalized. This could happen if the transaction was set to abort in the mempool, so that is
+                //       also incorrect, it should set the local decision if passing to consensus. However in this case
+                //       we only set abort, so setting abort here should have no effect. The intention is to abort a
+                //       transaction if we never receive a foreign prepared for it but this doesnt seem to be the case
+                //       here.
                 if transaction.is_finalized() {
                     // We don't know the transaction at all, or we know it but it's not finalised.
-                    let mut tx_rec = self.transaction_pool.get(tx, block.as_leaf_block(), transaction.id())?;
-                    // If the transaction is still in the pool we have to check if it was at least locally prepared,
-                    // otherwise abort it.
-                    if tx_rec.stage() == TransactionPoolStage::New || tx_rec.stage() == TransactionPoolStage::Prepared {
-                        tx_rec.update_local_decision(tx, Decision::Abort)?;
-                        has_unresolved_transactions = true;
+                    if let Some(mut tx_rec) = self
+                        .transaction_pool
+                        .get(tx, block.as_leaf_block(), transaction.id())
+                        // TODO: Prevents an error for now, this logic needs to be looked at.
+                        .optional()?
+                    {
+                        // If the transaction is still in the pool we have to check if it was at least locally prepared,
+                        // otherwise abort it.
+                        if tx_rec.stage() == TransactionPoolStage::New ||
+                            tx_rec.stage() == TransactionPoolStage::Prepared
+                        {
+                            tx_rec.update_local_decision(tx, Decision::Abort)?;
+                            has_unresolved_transactions = true;
+                        }
                     }
                 }
             }
