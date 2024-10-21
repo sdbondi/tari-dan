@@ -4,7 +4,7 @@
 use tari_bor::BorError;
 use tari_engine_types::indexed_value::IndexedValueError;
 use thiserror::Error;
-use wasmer::{ExportError, HostEnvInitError, InstantiationError};
+use wasmer::{ExportError, InstantiationError};
 
 use crate::runtime::RuntimeError;
 
@@ -22,8 +22,6 @@ pub enum WasmExecutionError {
     ExportError(#[from] ExportError),
     #[error(transparent)]
     WasmRuntimeError(#[from] wasmer::RuntimeError),
-    #[error(transparent)]
-    HostEnvInitError(#[from] HostEnvInitError),
     #[error("Expected function {function} to return a pointer")]
     ExpectedPointerReturn { function: String },
     #[error("Attempted to write {requested} bytes but pointer allocated {allocated}")]

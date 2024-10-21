@@ -72,7 +72,7 @@ impl WasmProcess {
         let mut env = WasmEnv::new(state);
         let store = module.wasm_module().store();
         let tari_engine = Function::new_native_with_env(store, env.clone(), Self::tari_engine_entrypoint);
-        let resolver = env.create_resolver(store, tari_engine);
+        let resolver = env.create_imports(store, tari_engine);
         let instance = Instance::new(module.wasm_module(), &resolver)?;
         Self::validate_template_tari_version(&module)?;
         env.init_with_instance(&instance)?;

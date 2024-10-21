@@ -177,8 +177,8 @@ fn get_function_block(template_ident: &Ident, ast: FunctionAst) -> Expr {
 
 fn replace_self_in_output(ast: &FunctionAst) -> Vec<Stmt> {
     let mut stmts: Vec<Stmt> = vec![];
-    match &ast.output_type {
-        Some(output_type) => match output_type {
+    if let Some(output_type) = &ast.output_type {
+        match output_type {
             TypeAst::Typed { type_path, .. } => {
                 if let Some(stmt) = replace_self_in_single_value(type_path) {
                     stmts.push(stmt);
@@ -188,8 +188,7 @@ fn replace_self_in_output(ast: &FunctionAst) -> Vec<Stmt> {
                 stmts.push(replace_self_in_tuple(type_tuple));
             },
             _ => todo!("replace_self_in_output only supports typed and tuple"),
-        },
-        None => {},
+        }
     }
 
     stmts

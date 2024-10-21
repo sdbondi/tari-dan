@@ -26,39 +26,23 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use wasmer::{
-    imports,
-    Function,
-    HostEnvInitError,
-    Instance,
-    LazyInit,
-    Memory,
-    NativeFunc,
-    Pages,
-    Resolver,
-    Store,
-    WasmerEnv,
-};
+use wasmer::{imports, ExportError, Function, Imports, Instance, Memory, Pages, Store};
 
 use crate::{runtime::RuntimeError, wasm::WasmExecutionError};
 
 #[derive(Clone)]
 pub struct WasmEnv<T> {
-    memory: LazyInit<Memory>,
-    mem_alloc: LazyInit<NativeFunc<i32, i32>>,
-    mem_free: LazyInit<NativeFunc<i32>>,
+    instance: Instance,
     state: T,
     last_panic: Arc<Mutex<Option<String>>>,
     last_engine_error: Arc<Mutex<Option<RuntimeError>>>,
 }
 
 impl<T: Clone + Sync + Send + 'static> WasmEnv<T> {
-    pub fn new(state: T) -> Self {
+    pub fn new(instance: Instance, state: T) -> Self {
         Self {
+            instance,
             state,
-            memory: LazyInit::new(),
-            mem_alloc: LazyInit::new(),
-            mem_free: LazyInit::new(),
             last_panic: Arc::new(Mutex::new(None)),
             last_engine_error: Arc::new(Mutex::new(None)),
         }
@@ -157,7 +141,9 @@ impl<T: Clone + Sync + Send + 'static> WasmEnv<T> {
     }
 
     fn get_mem_free_func(&self) -> Result<&NativeFunc<i32>, WasmExecutionError> {
-        self.mem_free
+        self.instance
+            .exports
+            .get_typed_function()
             .get_ref()
             .ok_or_else(|| WasmExecutionError::MissingAbiFunction {
                 function: "tari_free".into(),
@@ -165,19 +151,21 @@ impl<T: Clone + Sync + Send + 'static> WasmEnv<T> {
     }
 
     fn get_memory(&self) -> Result<&Memory, WasmExecutionError> {
-        self.memory.get_ref().ok_or(WasmExecutionError::MemoryNotInitialized)
+        let memory = self.instance.exports.get_memory("memory")?;
+        Ok(memory)
     }
 
     pub fn mem_size(&self) -> Pages {
-        self.memory.get_ref().map(|mem| mem.size()).unwrap_or(Pages(0))
+        let mem = self.get_memory().ok();
+        todo!()
     }
 
-    pub fn create_resolver(&self, store: &Store, tari_engine: Function) -> impl Resolver {
+    pub fn create_imports(&self, store: &mut Store, tari_engine: Function) -> Imports {
         imports! {
             "env" => {
                 "tari_engine" => tari_engine,
-                "debug" => Function::new_native_with_env(store, self.clone(), Self::debug_handler),
-                "on_panic" => Function::new_native_with_env(store, self.clone(), Self::on_panic_handler),
+                "debug" => Function::new_typed(store, |arg_ptr, arg_len| Self::debug_handler(self, arg_ptr, arg_len)),
+                "on_panic" => Function::new_typed(store, |msg_ptr: i32, msg_len: i32, line: i32, col: i32| Self::on_panic_handler(self, msg_ptr, msg_len, line, col)),
             }
         }
     }
@@ -219,8 +207,9 @@ impl<T: Clone + Sync + Send + 'static> WasmEnv<T> {
     }
 }
 
-impl<T: Clone + Sync + Send> WasmerEnv for WasmEnv<T> {
-    fn init_with_instance(&mut self, instance: &Instance) -> Result<(), HostEnvInitError> {
+impl<T: Clone + Sync + Send> WasmEnv<T> {
+    fn init_with_instance(&mut self, instance: &Instance) -> Result<(), ExportError> {
+        self.memory = Some(instance.exports.get_memory("memory")?);
         self.memory
             .initialize(instance.exports.get_with_generics_weak("memory")?);
         self.mem_alloc

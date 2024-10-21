@@ -23,19 +23,7 @@
 use std::sync::Arc;
 
 use tari_template_abi::{FunctionDef, TemplateDef, ABI_TEMPLATE_DEF_GLOBAL_NAME};
-use wasmer::{
-    BaseTunables,
-    CompilerConfig,
-    Cranelift,
-    CraneliftOptLevel,
-    Engine,
-    ExportError,
-    Function,
-    Instance,
-    Store,
-    Universal,
-    WasmerEnv,
-};
+use wasmer::{sys::BaseTunables, CompilerConfig, Cranelift, CraneliftOptLevel, Engine, ExportError, Function, Global, Instance, Store, Universal, WasmerEnv};
 
 use crate::{
     template::{LoadedTemplate, TemplateLoaderError, TemplateModuleLoader},
@@ -53,16 +41,18 @@ impl WasmModule {
     }
 
     pub fn load_template_from_code(code: &[u8]) -> Result<LoadedTemplate, TemplateLoaderError> {
-        let store = Self::create_store();
+        let engine = Self::create_engine();
+        let mut store = Self::create_store(&engine);
         let module = wasmer::Module::new(&store, code)?;
-        let mut env = WasmEnv::new(());
-        fn stub(_env: &WasmEnv<()>, _op: i32, _arg_ptr: i32, _arg_len: i32) -> i32 {
+        fn stub(_op: i32, _arg_ptr: i32, _arg_len: i32) -> i32 {
             0
         }
+        let mut env = WasmEnv::new(());
 
-        let stub = Function::new_native_with_env(&store, env.clone(), stub);
-        let imports = env.create_resolver(&store, stub);
-        let instance = Instance::new(&module, &imports)?;
+        Global::new(&mut store, )
+        let stub = Function::new_typed(&mut store, stub);
+        let imports = env.create_imports(&mut store, stub);
+        let instance = Instance::new(&mut store, &module, &imports)?;
         env.init_with_instance(&instance)?;
         validate_instance(&instance)?;
         validate_environment(&env)?;
@@ -75,14 +65,16 @@ impl WasmModule {
         &self.code
     }
 
-    fn create_store() -> Store {
+    fn create_engine() -> Cranelift {
         let mut cranelift = Cranelift::new();
         cranelift.opt_level(CraneliftOptLevel::Speed).canonicalize_nans(true);
         // TODO: Configure metering limit
         cranelift.push_middleware(Arc::new(metering::middleware(100_000_000)));
-        let engine = Universal::new(cranelift).engine();
-        let tunables = BaseTunables::for_target(engine.target());
-        Store::new_with_tunables(&engine, tunables)
+        cranelift
+    }
+
+    fn create_store<T: Into<Engine>>(engine: &T) -> Store {
+        Store::new(engine)
     }
 }
 
