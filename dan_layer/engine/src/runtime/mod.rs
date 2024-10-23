@@ -51,7 +51,10 @@ mod utils;
 mod working_state;
 mod workspace;
 
-use std::{fmt::Debug, sync::Arc};
+use std::{
+    fmt::Debug,
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+};
 
 use tari_bor::decode_exact;
 use tari_common_types::types::PublicKey;
@@ -95,96 +98,100 @@ use crate::runtime::{locking::LockedSubstate, scope::PushCallFrame};
 
 pub trait RuntimeInterface: Send + Sync {
     fn next_entity_id(&self) -> Result<EntityId, RuntimeError>;
-    fn emit_event(&self, topic: String, payload: Metadata) -> Result<(), RuntimeError>;
+    fn emit_event(&mut self, topic: String, payload: Metadata) -> Result<(), RuntimeError>;
 
-    fn emit_log(&self, level: LogLevel, message: String) -> Result<(), RuntimeError>;
+    fn emit_log(&mut self, level: LogLevel, message: String) -> Result<(), RuntimeError>;
 
-    fn load_component(&self, address: &ComponentAddress) -> Result<ComponentHeader, RuntimeError>;
+    fn load_component(&mut self, address: &ComponentAddress) -> Result<ComponentHeader, RuntimeError>;
 
-    fn lock_component(&self, address: &ComponentAddress, lock_flag: LockFlag) -> Result<LockedSubstate, RuntimeError>;
+    fn lock_component(
+        &mut self,
+        address: &ComponentAddress,
+        lock_flag: LockFlag,
+    ) -> Result<LockedSubstate, RuntimeError>;
 
     fn get_substate(&self, lock: &LockedSubstate) -> Result<SubstateValue, RuntimeError>;
     fn component_invoke(
-        &self,
+        &mut self,
         component_ref: ComponentRef,
         action: ComponentAction,
         args: EngineArgs,
     ) -> Result<InvokeResult, RuntimeError>;
 
     fn resource_invoke(
-        &self,
+        &mut self,
         resource_ref: ResourceRef,
         action: ResourceAction,
         args: EngineArgs,
     ) -> Result<InvokeResult, RuntimeError>;
 
     fn vault_invoke(
-        &self,
+        &mut self,
         vault_ref: VaultRef,
         action: VaultAction,
         args: EngineArgs,
     ) -> Result<InvokeResult, RuntimeError>;
 
     fn bucket_invoke(
-        &self,
+        &mut self,
         bucket_ref: BucketRef,
         action: BucketAction,
         args: EngineArgs,
     ) -> Result<InvokeResult, RuntimeError>;
 
     fn proof_invoke(
-        &self,
+        &mut self,
         proof_ref: ProofRef,
         action: ProofAction,
         args: EngineArgs,
     ) -> Result<InvokeResult, RuntimeError>;
-    fn workspace_invoke(&self, action: WorkspaceAction, args: EngineArgs) -> Result<InvokeResult, RuntimeError>;
+    fn workspace_invoke(&mut self, action: WorkspaceAction, args: EngineArgs) -> Result<InvokeResult, RuntimeError>;
 
     fn non_fungible_invoke(
-        &self,
+        &mut self,
         nf_addr: NonFungibleAddress,
         action: NonFungibleAction,
         args: EngineArgs,
     ) -> Result<InvokeResult, RuntimeError>;
 
-    fn consensus_invoke(&self, action: ConsensusAction) -> Result<InvokeResult, RuntimeError>;
+    fn consensus_invoke(&mut self, action: ConsensusAction) -> Result<InvokeResult, RuntimeError>;
 
-    fn generate_random_invoke(&self, action: GenerateRandomAction) -> Result<InvokeResult, RuntimeError>;
+    fn generate_random_invoke(&mut self, action: GenerateRandomAction) -> Result<InvokeResult, RuntimeError>;
 
-    fn generate_uuid(&self) -> Result<[u8; 32], RuntimeError>;
+    fn generate_uuid(&mut self) -> Result<[u8; 32], RuntimeError>;
 
-    fn set_last_instruction_output(&self, value: IndexedValue) -> Result<(), RuntimeError>;
+    fn set_last_instruction_output(&mut self, value: IndexedValue) -> Result<(), RuntimeError>;
 
-    fn claim_burn(&self, claim: ConfidentialClaim) -> Result<(), RuntimeError>;
+    fn claim_burn(&mut self, claim: ConfidentialClaim) -> Result<(), RuntimeError>;
 
-    fn claim_validator_fees(&self, epoch: Epoch, validator_public_key: PublicKey) -> Result<(), RuntimeError>;
+    fn claim_validator_fees(&mut self, epoch: Epoch, validator_public_key: PublicKey) -> Result<(), RuntimeError>;
 
-    fn set_fee_checkpoint(&self) -> Result<(), RuntimeError>;
-    fn reset_to_fee_checkpoint(&self) -> Result<(), RuntimeError>;
-    fn finalize(&self) -> Result<FinalizeResult, RuntimeError>;
+    fn set_fee_checkpoint(&mut self) -> Result<(), RuntimeError>;
+    fn reset_to_fee_checkpoint(&mut self) -> Result<(), RuntimeError>;
+    fn finalize(&mut self) -> Result<FinalizeResult, RuntimeError>;
     fn validate_finalized(&self) -> Result<(), RuntimeError>;
 
     fn caller_context_invoke(
-        &self,
+        &mut self,
         action: CallerContextAction,
         args: EngineArgs,
     ) -> Result<InvokeResult, RuntimeError>;
 
-    fn call_invoke(&self, action: CallAction, args: EngineArgs) -> Result<InvokeResult, RuntimeError>;
+    fn call_invoke(&mut self, action: CallAction, args: EngineArgs) -> Result<InvokeResult, RuntimeError>;
 
-    fn builtin_template_invoke(&self, action: BuiltinTemplateAction) -> Result<InvokeResult, RuntimeError>;
+    fn builtin_template_invoke(&mut self, action: BuiltinTemplateAction) -> Result<InvokeResult, RuntimeError>;
 
     fn check_component_access_rules(&self, method: &str, locked: &LockedSubstate) -> Result<(), RuntimeError>;
 
     fn validate_return_value(&self, value: &IndexedValue) -> Result<(), RuntimeError>;
 
-    fn push_call_frame(&self, frame: PushCallFrame) -> Result<(), RuntimeError>;
-    fn pop_call_frame(&self) -> Result<(), RuntimeError>;
+    fn push_call_frame(&mut self, frame: PushCallFrame) -> Result<(), RuntimeError>;
+    fn pop_call_frame(&mut self) -> Result<(), RuntimeError>;
 }
 
 #[derive(Clone)]
 pub struct Runtime {
-    interface: Arc<dyn RuntimeInterface>,
+    interface: Arc<RwLock<dyn RuntimeInterface>>,
 }
 
 impl Runtime {
@@ -194,7 +201,7 @@ impl Runtime {
             match arg {
                 Arg::Workspace(key) => {
                     let value = self
-                        .interface
+                        .interface_mut()
                         .workspace_invoke(WorkspaceAction::Get, invoke_args![key].into())?;
                     resolved.push(value.into_value()?);
                 },
@@ -206,12 +213,18 @@ impl Runtime {
 }
 
 impl Runtime {
-    pub fn new(interface: Arc<dyn RuntimeInterface>) -> Self {
-        Self { interface }
+    pub fn new(interface: impl RuntimeInterface + 'static) -> Self {
+        Self {
+            interface: Arc::new(RwLock::new(interface)),
+        }
     }
 
-    pub fn interface(&self) -> &dyn RuntimeInterface {
-        &*self.interface
+    pub fn interface(&self) -> RwLockReadGuard<'_, dyn RuntimeInterface> {
+        self.interface.read().unwrap()
+    }
+
+    pub fn interface_mut(&self) -> RwLockWriteGuard<'_, dyn RuntimeInterface + 'static> {
+        self.interface.write().unwrap()
     }
 }
 

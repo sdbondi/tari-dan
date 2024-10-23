@@ -144,7 +144,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
             network,
         )?;
 
-        let runtime = Runtime::new(Arc::new(runtime_interface));
+        let runtime = Runtime::new(runtime_interface);
         let transaction_hash = transaction.hash();
 
         let (fee_instructions, instructions) = transaction.into_instructions();
@@ -155,7 +155,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
             Ok(execution_results) => {
                 // Checkpoint the tracker state after the fee instructions have been executed in case of transaction
                 // failure.
-                if let Err(err) = runtime.interface().set_fee_checkpoint() {
+                if let Err(err) = runtime.interface_mut().set_fee_checkpoint() {
                     let mut finalize =
                         FinalizeResult::new_rejected(transaction_hash, RejectReason::ExecutionFailure(err.to_string()));
                     finalize.execution_results = execution_results;
@@ -181,7 +181,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
 
         match instruction_result {
             Ok(execution_results) => {
-                let mut finalize = runtime.interface().finalize()?;
+                let mut finalize = runtime.interface_mut().finalize()?;
                 if finalize.fee_receipt.is_paid_in_full() {
                     finalize.execution_results = execution_results;
                 } else {
@@ -196,9 +196,10 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
             Err(err) => {
                 // Reset the state to when the state at the end of the fee instructions. The fee charges for the
                 // successful instructions are still charged even though the transaction failed.
-                runtime.interface().reset_to_fee_checkpoint()?;
+                let mut interface_mut = runtime.interface_mut();
+                interface_mut.reset_to_fee_checkpoint()?;
                 // Finalize will now contain the fee payments and vault refunds only
-                let mut finalize = runtime.interface().finalize()?;
+                let mut finalize = interface_mut.finalize()?;
                 finalize.execution_results = fee_exec_result;
                 finalize.result = TransactionResult::AcceptFeeRejectRest(
                     finalize
@@ -275,12 +276,12 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
                 Ok(InstructionResult::empty())
             },
             Instruction::EmitLog { level, message } => {
-                runtime.interface().emit_log(level, message)?;
+                runtime.interface_mut().emit_log(level, message)?;
                 Ok(InstructionResult::empty())
             },
             Instruction::ClaimBurn { claim } => {
                 // Need to call it on the runtime so that a bucket is created.
-                runtime.interface().claim_burn(*claim)?;
+                runtime.interface_mut().claim_burn(*claim)?;
                 Ok(InstructionResult::empty())
             },
             Instruction::ClaimValidatorFees {
@@ -288,7 +289,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
                 validator_public_key,
             } => {
                 runtime
-                    .interface()
+                    .interface_mut()
                     .claim_validator_fees(Epoch(epoch), validator_public_key)?;
                 Ok(InstructionResult::empty())
             },
@@ -297,7 +298,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
                 resource_address,
                 min_amount,
             } => {
-                runtime.interface().workspace_invoke(
+                runtime.interface_mut().workspace_invoke(
                     WorkspaceAction::AssertBucketContains,
                     invoke_args![key, resource_address, min_amount].into(),
                 )?;
@@ -308,14 +309,14 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
 
     pub fn put_output_on_workspace_with_name(runtime: &Runtime, key: Vec<u8>) -> Result<(), TransactionError> {
         runtime
-            .interface()
+            .interface_mut()
             .workspace_invoke(WorkspaceAction::PutLastInstructionOutput, invoke_args![key].into())?;
         Ok(())
     }
 
     pub fn drop_all_proofs_in_workspace(runtime: &Runtime) -> Result<(), TransactionError> {
         runtime
-            .interface()
+            .interface_mut()
             .workspace_invoke(WorkspaceAction::DropAllProofs, invoke_args![].into())?;
         Ok(())
     }
@@ -382,7 +383,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
             .map(IndexedWellKnownTypes::from_value)
             .collect::<Result<_, _>>()?;
 
-        runtime.interface().push_call_frame(PushCallFrame::Static {
+        runtime.interface_mut().push_call_frame(PushCallFrame::Static {
             template_address: ACCOUNT_TEMPLATE_ADDRESS,
             module_name: template.template_name().to_string(),
             arg_scope,
@@ -391,9 +392,9 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
 
         let result = Self::invoke_template(template, template_provider, runtime.clone(), function_def, args)?;
 
-        runtime.interface().validate_return_value(&result.indexed)?;
-
-        runtime.interface().pop_call_frame()?;
+        let mut interface_mut = runtime.interface_mut();
+        interface_mut.validate_return_value(&result.indexed)?;
+        interface_mut.pop_call_frame()?;
 
         Ok(result)
     }
@@ -427,18 +428,23 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
             .map(IndexedWellKnownTypes::from_value)
             .collect::<Result<_, _>>()?;
 
-        runtime.interface().push_call_frame(PushCallFrame::Static {
-            template_address: *template_address,
-            module_name: template.template_name().to_string(),
-            arg_scope,
-            entity_id: runtime.interface().next_entity_id()?,
-        })?;
+        {
+            let mut interface_mut = runtime.interface_mut();
+            let entity_id = interface_mut.next_entity_id()?;
+            interface_mut.push_call_frame(PushCallFrame::Static {
+                template_address: *template_address,
+                module_name: template.template_name().to_string(),
+                arg_scope,
+                entity_id,
+            })?;
+        }
 
+        // TODO: we can probably pass in interface_mut
         let result = Self::invoke_template(template, template_provider, runtime.clone(), function_def, args)?;
 
-        runtime.interface().validate_return_value(&result.indexed)?;
-
-        runtime.interface().pop_call_frame()?;
+        let mut interface_mut = runtime.interface_mut();
+        interface_mut.validate_return_value(&result.indexed)?;
+        interface_mut.pop_call_frame()?;
 
         Ok(result)
     }
@@ -450,7 +456,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
         method: &str,
         args: Vec<Arg>,
     ) -> Result<InstructionResult, TransactionError> {
-        let component = runtime.interface().load_component(component_address)?;
+        let component = runtime.interface_mut().load_component(component_address)?;
         let template_address = component.template_address;
 
         let template = template_provider
@@ -475,7 +481,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
             LockFlag::Read
         };
 
-        let component_lock = runtime.interface().lock_component(component_address, lock_flag)?;
+        let component_lock = runtime.interface_mut().lock_component(component_address, lock_flag)?;
 
         let args = runtime.resolve_args(args)?;
         let arg_scope = args
@@ -485,7 +491,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
 
         let component_scope = IndexedWellKnownTypes::from_value(component.state())?;
 
-        runtime.interface().push_call_frame(PushCallFrame::ForComponent {
+        runtime.interface_mut().push_call_frame(PushCallFrame::ForComponent {
             template_address,
             module_name: template.template_name().to_string(),
             component_scope,
@@ -505,8 +511,9 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
 
         let result = Self::invoke_template(template, template_provider, runtime.clone(), function_def, final_args)?;
 
-        runtime.interface().validate_return_value(&result.indexed)?;
-        runtime.interface().pop_call_frame()?;
+        let mut interface_mut = runtime.interface_mut();
+        interface_mut.validate_return_value(&result.indexed)?;
+        interface_mut.pop_call_frame()?;
 
         Ok(result)
     }

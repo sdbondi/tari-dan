@@ -102,7 +102,7 @@ use tari_template_lib::{
     template::BuiltinTemplate,
 };
 
-use super::{working_state::WorkingState, Runtime};
+use super::Runtime;
 use crate::{
     runtime::{
         engine_args::EngineArgs,
@@ -147,7 +147,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         max_call_depth: usize,
         network: Network,
     ) -> Result<Self, RuntimeError> {
-        let runtime = Self {
+        let mut runtime = Self {
             tracker,
             template_provider,
             entity_id_provider,
@@ -160,23 +160,23 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         Ok(runtime)
     }
 
-    fn invoke_modules_on_initialize(&self) -> Result<(), RuntimeError> {
+    fn invoke_modules_on_initialize(&mut self) -> Result<(), RuntimeError> {
         for module in &self.modules {
-            module.on_initialize(&self.tracker)?;
+            module.on_initialize(&mut self.tracker)?;
         }
         Ok(())
     }
 
-    fn invoke_modules_on_runtime_call(&self, function: &'static str) -> Result<(), RuntimeError> {
+    fn invoke_modules_on_runtime_call(&mut self, function: &'static str) -> Result<(), RuntimeError> {
         for module in &self.modules {
-            module.on_runtime_call(&self.tracker, function)?;
+            module.on_runtime_call(&mut self.tracker, function)?;
         }
         Ok(())
     }
 
-    fn invoke_modules_on_before_finalize(&self) -> Result<(), RuntimeError> {
+    fn invoke_modules_on_before_finalize(&mut self) -> Result<(), RuntimeError> {
         for module in &self.modules {
-            module.on_before_finalize(&self.tracker)?;
+            module.on_before_finalize(&mut self.tracker)?;
         }
         Ok(())
     }
@@ -222,17 +222,16 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
     }
 
     fn emit_vault_events<T: Into<String>>(
-        &self,
+        &mut self,
         topic: T,
         vault_id: VaultId,
         vault_lock: &LockedSubstate,
         amount: Amount,
         resource_type: ResourceType,
-        state: &mut WorkingState,
     ) -> Result<(), RuntimeError> {
         let tx_hash = self.entity_id_provider.transaction_hash();
-        let (template_address, _) = state.current_template()?;
-        let resource_address = state.get_vault(vault_lock)?.resource_address();
+        let (template_address, _) = self.tracker.state().current_template()?;
+        let resource_address = self.tracker.state().get_vault(vault_lock)?.resource_address();
 
         let mut payload = Metadata::new();
         payload.insert("vault_id", vault_id.to_string());
@@ -260,14 +259,15 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         );
         debug!(target: LOG_TARGET, "Emitted vault event {}", vault_event);
         debug!(target: LOG_TARGET, "Emitted resource event {}", resource_event);
-        state.push_event(vault_event);
-        state.push_event(resource_event);
+        let state_mut = self.tracker.state_mut();
+        state_mut.push_event(vault_event);
+        state_mut.push_event(resource_event);
 
         Ok(())
     }
 
     fn invoke_resource_access_hook(
-        &self,
+        &mut self,
         auth_hook: AuthHook,
         mut auth_caller: AuthHookCaller,
         action: ResourceAuthAction,
@@ -329,7 +329,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         method: &str,
         args: Vec<Arg>,
     ) -> Result<InstructionResult, RuntimeError> {
-        let call_runtime = Runtime::new(Arc::new(self.clone()));
+        let call_runtime = Runtime::new(self.clone());
         TransactionProcessor::call_method(&*self.template_provider, &call_runtime, component_address, method, args)
             .map_err(|e| RuntimeError::CrossTemplateCallMethodError {
                 component_address: *component_address,
@@ -345,7 +345,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         args: Vec<Arg>,
     ) -> Result<InstructionResult, RuntimeError> {
         // we are initializing a new runtime for the nested call
-        let call_runtime = Runtime::new(Arc::new(self.clone()));
+        let call_runtime = Runtime::new(self.clone());
         TransactionProcessor::call_function(
             &*self.template_provider,
             &call_runtime,
@@ -360,7 +360,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         })
     }
 
-    fn check_resource_auth_hook(&self, hook: &AuthHook) -> Result<(), RuntimeError> {
+    fn check_resource_auth_hook(&mut self, hook: &AuthHook) -> Result<(), RuntimeError> {
         let template_address = self
             .tracker
             .write_with(|state| state.get_template_for_component(&hook.component_address))?;
@@ -422,7 +422,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         Ok(id)
     }
 
-    fn emit_event(&self, topic: String, payload: Metadata) -> Result<(), RuntimeError> {
+    fn emit_event(&mut self, topic: String, payload: Metadata) -> Result<(), RuntimeError> {
         // forbid template users to emit events that can be confused with the ones emitted by the engine
         if topic.starts_with(STANDARD_TOPIC_PREFIX) {
             return Err(RuntimeError::InvalidEventTopic { topic });
@@ -448,7 +448,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         Ok(())
     }
 
-    fn emit_log(&self, level: LogLevel, message: String) -> Result<(), RuntimeError> {
+    fn emit_log(&mut self, level: LogLevel, message: String) -> Result<(), RuntimeError> {
         self.invoke_modules_on_runtime_call("emit_log")?;
 
         let log_level = match level {
@@ -464,17 +464,21 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         Ok(())
     }
 
-    fn load_component(&self, address: &ComponentAddress) -> Result<ComponentHeader, RuntimeError> {
+    fn load_component(&mut self, address: &ComponentAddress) -> Result<ComponentHeader, RuntimeError> {
         self.invoke_modules_on_runtime_call("load_component")?;
         self.tracker.write_with(|state| state.load_component(address).cloned())
     }
 
-    fn lock_component(&self, address: &ComponentAddress, lock_flag: LockFlag) -> Result<LockedSubstate, RuntimeError> {
+    fn lock_component(
+        &mut self,
+        address: &ComponentAddress,
+        lock_flag: LockFlag,
+    ) -> Result<LockedSubstate, RuntimeError> {
         self.tracker.lock_substate(&SubstateId::Component(*address), lock_flag)
     }
 
     fn caller_context_invoke(
-        &self,
+        &mut self,
         action: CallerContextAction,
         args: EngineArgs,
     ) -> Result<InvokeResult, RuntimeError> {
@@ -531,7 +535,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
 
     #[allow(clippy::too_many_lines)]
     fn component_invoke(
-        &self,
+        &mut self,
         component_ref: ComponentRef,
         action: ComponentAction,
         args: EngineArgs,
@@ -737,7 +741,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
 
     #[allow(clippy::too_many_lines)]
     fn resource_invoke(
-        &self,
+        &mut self,
         resource_ref: ResourceRef,
         action: ResourceAction,
         args: EngineArgs,
@@ -1078,7 +1082,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
 
     #[allow(clippy::too_many_lines)]
     fn vault_invoke(
-        &self,
+        &mut self,
         vault_ref: VaultRef,
         action: VaultAction,
         args: EngineArgs,
@@ -1181,34 +1185,31 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
                     self.invoke_resource_access_hook(auth_hook, auth_caller, ResourceAuthAction::Deposit)?;
                 }
 
-                self.tracker.write_with(move |state_mut| {
-                    let bucket = state_mut.take_bucket(bucket_id)?;
-                    // It is invalid to deposit a bucket that has locked funds
-                    if !bucket.locked_amount().is_zero() {
-                        return Err(RuntimeError::InvalidOpDepositLockedBucket {
-                            bucket_id,
-                            locked_amount: bucket.locked_amount(),
-                        });
-                    }
+                let bucket = self.tracker.state_mut().take_bucket(bucket_id)?;
+                // It is invalid to deposit a bucket that has locked funds
+                if !bucket.locked_amount().is_zero() {
+                    return Err(RuntimeError::InvalidOpDepositLockedBucket {
+                        bucket_id,
+                        locked_amount: bucket.locked_amount(),
+                    });
+                }
 
-                    // Emit a builtin event for the deposit
-                    self.emit_vault_events(
-                        VAULT_DEPOSIT_TOPIC.to_owned(),
-                        vault_id,
-                        &vault_lock,
-                        bucket.amount(),
-                        bucket.resource_type(),
-                        state_mut,
-                    )?;
+                // Emit a builtin event for the deposit
+                self.emit_vault_events(
+                    VAULT_DEPOSIT_TOPIC.to_owned(),
+                    vault_id,
+                    &vault_lock,
+                    bucket.amount(),
+                    bucket.resource_type(),
+                )?;
 
-                    let vault_mut = state_mut.get_vault_mut(&vault_lock)?;
-                    vault_mut.deposit(bucket)?;
+                let vault_mut = self.tracker.state_mut().get_vault_mut(&vault_lock)?;
+                vault_mut.deposit(bucket)?;
 
-                    state_mut.unlock_substate(resource_lock)?;
-                    state_mut.unlock_substate(vault_lock)?;
+                self.tracker.state_mut().unlock_substate(resource_lock)?;
+                self.tracker.state_mut().unlock_substate(vault_lock)?;
 
-                    Ok(InvokeResult::unit())
-                })
+                Ok(InvokeResult::unit())
             },
             VaultAction::Withdraw => {
                 let vault_id = vault_ref.vault_id().ok_or_else(|| RuntimeError::InvalidArgument {
@@ -1242,50 +1243,48 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
                     self.invoke_resource_access_hook(auth_hook, auth_caller, ResourceAuthAction::Withdraw)?;
                 }
 
-                self.tracker.write_with(|state| {
-                    let resource = state.get_resource(&resource_lock)?;
-                    let maybe_view_key = resource.view_key().cloned();
+                let resource = self.tracker.state().get_resource(&resource_lock)?;
+                let maybe_view_key = resource.view_key().cloned();
 
-                    let vault_mut = state.get_vault_mut(&vault_lock)?;
-                    let (resource_container, amount) = match arg {
-                        VaultWithdrawArg::Fungible { amount } => {
-                            let container = vault_mut.withdraw(amount)?;
-                            (container, amount)
-                        },
-                        VaultWithdrawArg::NonFungible { ids } => {
-                            let container = vault_mut.withdraw_non_fungibles(&ids)?;
-                            let amount =
-                                Amount(ids.len().try_into().map_err(|_| RuntimeError::NumericConversionError {
-                                    details: "Could not convert to i64".to_owned(),
-                                })?);
-                            (container, amount)
-                        },
-                        VaultWithdrawArg::Confidential { proof } => {
-                            let amount = proof.revealed_input_amount();
-                            let container = vault_mut.withdraw_confidential(*proof, maybe_view_key.as_ref())?;
-                            (container, amount)
-                        },
-                    };
+                let vault_mut = self.tracker.state_mut().get_vault_mut(&vault_lock)?;
+                let (resource_container, amount) = match arg {
+                    VaultWithdrawArg::Fungible { amount } => {
+                        let container = vault_mut.withdraw(amount)?;
+                        (container, amount)
+                    },
+                    VaultWithdrawArg::NonFungible { ids } => {
+                        let container = vault_mut.withdraw_non_fungibles(&ids)?;
+                        let amount =
+                            Amount(ids.len().try_into().map_err(|_| RuntimeError::NumericConversionError {
+                                details: "Could not convert to i64".to_owned(),
+                            })?);
+                        (container, amount)
+                    },
+                    VaultWithdrawArg::Confidential { proof } => {
+                        let amount = proof.revealed_input_amount();
+                        let container = vault_mut.withdraw_confidential(*proof, maybe_view_key.as_ref())?;
+                        (container, amount)
+                    },
+                };
 
-                    // Emit a builtin event for the withdraw
-                    self.emit_vault_events(
-                        VAULT_WITHDRAW_TOPIC,
-                        vault_id,
-                        &vault_lock,
-                        amount,
-                        resource_container.resource_type(),
-                        state,
-                    )?;
+                // Emit a builtin event for the withdraw
+                self.emit_vault_events(
+                    VAULT_WITHDRAW_TOPIC,
+                    vault_id,
+                    &vault_lock,
+                    amount,
+                    resource_container.resource_type(),
+                )?;
 
-                    let bucket_id = state.id_provider()?.new_bucket_id();
-                    state.new_bucket(bucket_id, resource_container)?;
+                let bucket_id = self.tracker.state().id_provider()?.new_bucket_id();
+                let state_mut = self.tracker.state_mut();
+                state_mut.new_bucket(bucket_id, resource_container)?;
 
-                    state.unlock_substate(vault_lock)?;
-                    state.unlock_substate(resource_lock)?;
+                state_mut.unlock_substate(vault_lock)?;
+                state_mut.unlock_substate(resource_lock)?;
 
-                    let bucket = tari_template_lib::models::Bucket::from_id(bucket_id);
-                    Ok(InvokeResult::encode(&bucket)?)
-                })
+                let bucket = tari_template_lib::models::Bucket::from_id(bucket_id);
+                Ok(InvokeResult::encode(&bucket)?)
             },
             VaultAction::GetBalance => {
                 let vault_id = vault_ref.vault_id().ok_or_else(|| RuntimeError::InvalidArgument {
@@ -1630,7 +1629,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
 
     #[allow(clippy::too_many_lines)]
     fn bucket_invoke(
-        &self,
+        &mut self,
         bucket_ref: BucketRef,
         action: BucketAction,
         args: EngineArgs,
@@ -1875,7 +1874,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
     }
 
     fn proof_invoke(
-        &self,
+        &mut self,
         proof_ref: ProofRef,
         action: ProofAction,
         args: EngineArgs,
@@ -1984,7 +1983,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         }
     }
 
-    fn workspace_invoke(&self, action: WorkspaceAction, args: EngineArgs) -> Result<InvokeResult, RuntimeError> {
+    fn workspace_invoke(&mut self, action: WorkspaceAction, args: EngineArgs) -> Result<InvokeResult, RuntimeError> {
         self.invoke_modules_on_runtime_call("workspace_invoke")?;
 
         debug!(target: LOG_TARGET, "Workspace invoke: {:?}", action,);
@@ -2065,7 +2064,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
     }
 
     fn non_fungible_invoke(
-        &self,
+        &mut self,
         nf_addr: NonFungibleAddress,
         action: NonFungibleAction,
         args: EngineArgs,
@@ -2120,7 +2119,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         }
     }
 
-    fn consensus_invoke(&self, action: ConsensusAction) -> Result<InvokeResult, RuntimeError> {
+    fn consensus_invoke(&mut self, action: ConsensusAction) -> Result<InvokeResult, RuntimeError> {
         self.invoke_modules_on_runtime_call("consensus_invoke")?;
         match action {
             ConsensusAction::GetCurrentEpoch => {
@@ -2130,7 +2129,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         }
     }
 
-    fn generate_random_invoke(&self, action: GenerateRandomAction) -> Result<InvokeResult, RuntimeError> {
+    fn generate_random_invoke(&mut self, action: GenerateRandomAction) -> Result<InvokeResult, RuntimeError> {
         self.invoke_modules_on_runtime_call("generate_random_invoke")?;
         match action {
             GenerateRandomAction::GetRandomBytes { len } => {
@@ -2140,7 +2139,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         }
     }
 
-    fn call_invoke(&self, action: CallAction, args: EngineArgs) -> Result<InvokeResult, RuntimeError> {
+    fn call_invoke(&mut self, action: CallAction, args: EngineArgs) -> Result<InvokeResult, RuntimeError> {
         self.invoke_modules_on_runtime_call("call_invoke")?;
         debug!(
             target: LOG_TARGET,
@@ -2173,7 +2172,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         Ok(InvokeResult::from_value(exec_result.indexed.into_value()))
     }
 
-    fn generate_uuid(&self) -> Result<[u8; 32], RuntimeError> {
+    fn generate_uuid(&mut self) -> Result<[u8; 32], RuntimeError> {
         self.invoke_modules_on_runtime_call("generate_uuid")?;
         self.tracker.read_with(|state| {
             let id_provider = state.id_provider()?;
@@ -2181,7 +2180,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         })
     }
 
-    fn set_last_instruction_output(&self, value: IndexedValue) -> Result<(), RuntimeError> {
+    fn set_last_instruction_output(&mut self, value: IndexedValue) -> Result<(), RuntimeError> {
         self.invoke_modules_on_runtime_call("set_last_instruction_output")?;
         self.tracker.write_with(|state| {
             state.set_last_instruction_output(value);
@@ -2189,7 +2188,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         Ok(())
     }
 
-    fn claim_burn(&self, claim: ConfidentialClaim) -> Result<(), RuntimeError> {
+    fn claim_burn(&mut self, claim: ConfidentialClaim) -> Result<(), RuntimeError> {
         let ConfidentialClaim {
             public_key: diffie_hellman_public_key,
             output_address,
@@ -2247,7 +2246,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         Ok(())
     }
 
-    fn claim_validator_fees(&self, epoch: Epoch, validator_public_key: PublicKey) -> Result<(), RuntimeError> {
+    fn claim_validator_fees(&mut self, epoch: Epoch, validator_public_key: PublicKey) -> Result<(), RuntimeError> {
         self.tracker.write_with(|state| {
             let resource = state.claim_fee(epoch, validator_public_key)?;
             let bucket_id = state.new_bucket_id();
@@ -2259,22 +2258,22 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
         Ok(())
     }
 
-    fn set_fee_checkpoint(&self) -> Result<(), RuntimeError> {
+    fn set_fee_checkpoint(&mut self) -> Result<(), RuntimeError> {
         if self.tracker.total_fee_payments() < self.tracker.total_fee_charges() {
             return Err(RuntimeError::InsufficientFeesPaid {
                 required_fee: self.tracker.total_fee_charges(),
                 fees_paid: self.tracker.total_fee_payments(),
             });
         }
-        self.tracker.fee_checkpoint()
+        self.tracker.set_fee_checkpoint()
     }
 
-    fn reset_to_fee_checkpoint(&self) -> Result<(), RuntimeError> {
+    fn reset_to_fee_checkpoint(&mut self) -> Result<(), RuntimeError> {
         warn!(target: LOG_TARGET, "Resetting to fee checkpoint");
         self.tracker.reset_to_fee_checkpoint()
     }
 
-    fn finalize(&self) -> Result<FinalizeResult, RuntimeError> {
+    fn finalize(&mut self) -> Result<FinalizeResult, RuntimeError> {
         self.invoke_modules_on_runtime_call("finalize")?;
 
         // If the fee module is present, this will add substate storage fees
@@ -2320,17 +2319,17 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
             .read_with(|state| state.check_all_substates_known(value.well_known_types()))
     }
 
-    fn push_call_frame(&self, frame: PushCallFrame) -> Result<(), RuntimeError> {
+    fn push_call_frame(&mut self, frame: PushCallFrame) -> Result<(), RuntimeError> {
         self.tracker.push_call_frame(frame, self.max_call_depth)?;
         Ok(())
     }
 
-    fn pop_call_frame(&self) -> Result<(), RuntimeError> {
+    fn pop_call_frame(&mut self) -> Result<(), RuntimeError> {
         self.tracker.pop_call_frame()?;
         Ok(())
     }
 
-    fn builtin_template_invoke(&self, action: BuiltinTemplateAction) -> Result<InvokeResult, RuntimeError> {
+    fn builtin_template_invoke(&mut self, action: BuiltinTemplateAction) -> Result<InvokeResult, RuntimeError> {
         self.invoke_modules_on_runtime_call("builtin_template_invoke")?;
 
         let address = match action {

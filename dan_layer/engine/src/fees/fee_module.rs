@@ -24,17 +24,17 @@ impl FeeModule {
 }
 
 impl RuntimeModule for FeeModule {
-    fn on_initialize(&self, track: &StateTracker) -> Result<(), RuntimeModuleError> {
+    fn on_initialize(&self, track: &mut StateTracker) -> Result<(), RuntimeModuleError> {
         track.add_fee_charge(FeeSource::Initial, self.initial_cost);
         Ok(())
     }
 
-    fn on_runtime_call(&self, track: &StateTracker, _call: &'static str) -> Result<(), RuntimeModuleError> {
+    fn on_runtime_call(&self, track: &mut StateTracker, _call: &'static str) -> Result<(), RuntimeModuleError> {
         track.add_fee_charge(FeeSource::RuntimeCall, self.fee_table.per_module_call_cost());
         Ok(())
     }
 
-    fn on_before_finalize(&self, track: &StateTracker) -> Result<(), RuntimeModuleError> {
+    fn on_before_finalize(&self, track: &mut StateTracker) -> Result<(), RuntimeModuleError> {
         let total_storage = track.with_substates_to_persist(|changes| {
             let mut counter = ByteCounter::new();
             for substate in changes.values() {

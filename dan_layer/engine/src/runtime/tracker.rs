@@ -20,10 +20,7 @@
 //   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //   USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use std::{
-    convert::TryFrom,
-    sync::{Arc, Mutex, RwLock},
-};
+use std::convert::TryFrom;
 
 use indexmap::IndexMap;
 use log::*;
@@ -63,8 +60,8 @@ const LOG_TARGET: &str = "tari::dan::engine::runtime::state_tracker";
 
 #[derive(Debug, Clone)]
 pub struct StateTracker {
-    working_state: Arc<RwLock<WorkingState>>,
-    fee_checkpoint: Arc<Mutex<Option<WorkingState>>>,
+    working_state: WorkingState,
+    fee_checkpoint: Option<WorkingState>,
 }
 
 impl StateTracker {
@@ -75,13 +72,8 @@ impl StateTracker {
         transaction_hash: Hash,
     ) -> Self {
         Self {
-            working_state: Arc::new(RwLock::new(WorkingState::new(
-                state_store,
-                virtual_substates,
-                initial_call_scope,
-                transaction_hash,
-            ))),
-            fee_checkpoint: Arc::new(Mutex::new(None)),
+            working_state: WorkingState::new(state_store, virtual_substates, initial_call_scope, transaction_hash),
+            fee_checkpoint: None,
         }
     }
 
@@ -97,15 +89,15 @@ impl StateTracker {
         })
     }
 
-    pub fn add_event(&self, event: Event) {
+    pub fn add_event(&mut self, event: Event) {
         self.write_with(|state| state.push_event(event));
     }
 
-    pub fn add_log(&self, log: LogEntry) {
+    pub fn add_log(&mut self, log: LogEntry) {
         self.write_with(|state| state.push_log(log));
     }
 
-    pub fn take_events(&self) -> Vec<Event> {
+    pub fn take_events(&mut self) -> Vec<Event> {
         self.write_with(|state| state.take_events())
     }
 
@@ -126,7 +118,7 @@ impl StateTracker {
     }
 
     pub fn take_unclaimed_confidential_output(
-        &self,
+        &mut self,
         address: UnclaimedConfidentialOutputAddress,
     ) -> Result<UnclaimedConfidentialOutput, RuntimeError> {
         self.write_with(|state| {
@@ -149,7 +141,7 @@ impl StateTracker {
     }
 
     pub fn new_component(
-        &self,
+        &mut self,
         component_state: tari_bor::Value,
         owner_key: Option<RistrettoPublicKeyBytes>,
         owner_rule: OwnerRule,
@@ -206,15 +198,15 @@ impl StateTracker {
         })
     }
 
-    pub fn lock_substate(&self, address: &SubstateId, lock_flag: LockFlag) -> Result<LockedSubstate, RuntimeError> {
+    pub fn lock_substate(&mut self, address: &SubstateId, lock_flag: LockFlag) -> Result<LockedSubstate, RuntimeError> {
         self.write_with(|state| state.lock_substate(address, lock_flag))
     }
 
-    pub fn unlock_substate(&self, locked: LockedSubstate) -> Result<(), RuntimeError> {
+    pub fn unlock_substate(&mut self, locked: LockedSubstate) -> Result<(), RuntimeError> {
         self.write_with(|state| state.unlock_substate(locked))
     }
 
-    pub fn push_call_frame(&self, push_frame: PushCallFrame, max_call_depth: usize) -> Result<(), RuntimeError> {
+    pub fn push_call_frame(&mut self, push_frame: PushCallFrame, max_call_depth: usize) -> Result<(), RuntimeError> {
         self.write_with(|state| {
             // If substates used in args are in scope for the current frame, we can bring then into scope for the new
             // frame
@@ -233,11 +225,11 @@ impl StateTracker {
         })
     }
 
-    pub fn pop_call_frame(&self) -> Result<(), RuntimeError> {
+    pub fn pop_call_frame(&mut self) -> Result<(), RuntimeError> {
         self.write_with(|state| state.pop_frame())
     }
 
-    pub fn take_last_instruction_output(&self) -> Option<IndexedValue> {
+    pub fn take_last_instruction_output(&mut self) -> Option<IndexedValue> {
         self.write_with(|state| state.take_last_instruction_output())
     }
 
@@ -257,11 +249,11 @@ impl StateTracker {
         self.read_with(|state| f(state.workspace()))
     }
 
-    pub fn with_workspace_mut<F: FnOnce(&mut Workspace) -> R, R>(&self, f: F) -> R {
+    pub fn with_workspace_mut<F: FnOnce(&mut Workspace) -> R, R>(&mut self, f: F) -> R {
         self.write_with(|state| f(state.workspace_mut()))
     }
 
-    pub fn add_fee_charge(&self, source: FeeSource, amount: u64) {
+    pub fn add_fee_charge(&mut self, source: FeeSource, amount: u64) {
         if amount == 0 {
             debug!(target: LOG_TARGET, "Add fee: source: {:?}, amount: {}", source, amount);
             return;
@@ -274,7 +266,7 @@ impl StateTracker {
     }
 
     pub fn finalize(
-        &self,
+        &mut self,
         mut substates_to_persist: IndexMap<SubstateId, SubstateValue>,
     ) -> Result<FinalizeResult, RuntimeError> {
         // Finalise will always reset the state
@@ -307,19 +299,16 @@ impl StateTracker {
         Ok(finalized)
     }
 
-    pub fn fee_checkpoint(&self) -> Result<(), RuntimeError> {
-        self.read_with(|state| {
-            // Check that the checkpoint is in a valid state
-            state.validate_finalized()?;
-            let mut checkpoint = self.fee_checkpoint.lock().unwrap();
-            *checkpoint = Some(state.clone());
-            Ok(())
-        })
+    pub fn set_fee_checkpoint(&mut self) -> Result<(), RuntimeError> {
+        // Check that the checkpoint is in a valid state
+        self.state().validate_finalized()?;
+        self.fee_checkpoint = Some(self.state().clone());
+        Ok(())
     }
 
-    pub fn reset_to_fee_checkpoint(&self) -> Result<(), RuntimeError> {
-        let mut checkpoint = self.fee_checkpoint.lock().unwrap();
-        if let Some(checkpoint) = checkpoint.take() {
+    pub fn reset_to_fee_checkpoint(&mut self) -> Result<(), RuntimeError> {
+        let checkpoint = self.fee_checkpoint.take();
+        if let Some(checkpoint) = checkpoint {
             self.write_with(|state| {
                 let fee_state = state.fee_state().clone();
                 *state = checkpoint;
@@ -332,15 +321,15 @@ impl StateTracker {
         }
     }
 
-    fn take_working_state(&self) -> WorkingState {
+    fn take_working_state(&mut self) -> WorkingState {
         self.write_with(|current_state| current_state.take_state())
     }
 
-    pub fn take_substates_to_persist(&self) -> IndexMap<SubstateId, SubstateValue> {
+    pub fn take_substates_to_persist(&mut self) -> IndexMap<SubstateId, SubstateValue> {
         self.write_with(|state| state.take_mutated_substates())
     }
 
-    pub fn with_substates_to_persist<F: FnMut(&IndexMap<SubstateId, SubstateValue>) -> R, R>(&self, mut f: F) -> R {
+    pub fn with_substates_to_persist<F: FnMut(&IndexMap<SubstateId, SubstateValue>) -> R, R>(&mut self, mut f: F) -> R {
         self.write_with(|state| f(state.mutated_substates()))
     }
 
@@ -361,10 +350,18 @@ impl StateTracker {
     }
 
     pub(super) fn read_with<R, F: FnOnce(&WorkingState) -> R>(&self, f: F) -> R {
-        f(&self.working_state.read().unwrap())
+        f(&self.working_state)
     }
 
-    pub(super) fn write_with<R, F: FnOnce(&mut WorkingState) -> R>(&self, f: F) -> R {
-        f(&mut self.working_state.write().unwrap())
+    pub(super) fn write_with<R, F: FnOnce(&mut WorkingState) -> R>(&mut self, f: F) -> R {
+        f(&mut self.working_state)
+    }
+
+    pub(super) fn state(&self) -> &WorkingState {
+        &self.working_state
+    }
+
+    pub(super) fn state_mut(&mut self) -> &mut WorkingState {
+        &mut self.working_state
     }
 }
