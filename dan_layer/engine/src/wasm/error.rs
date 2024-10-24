@@ -37,8 +37,8 @@ pub enum WasmExecutionError {
     MemoryNotSet,
     #[error("Missing function {function}")]
     MissingAbiFunction { function: &'static str },
-    #[error("Runtime error: {0}")]
-    RuntimeError(#[from] RuntimeError),
+    // #[error("Runtime error: {0}")]
+    // RuntimeError(#[from] RuntimeError),
     #[error("Failed to decode argument for engine call: {0:?}")]
     EngineArgDecodeFailed(BorError),
     #[error("maximum module memory size exceeded")]

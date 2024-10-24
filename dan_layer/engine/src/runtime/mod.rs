@@ -30,7 +30,7 @@ mod engine_args;
 pub use crate::runtime::engine_args::EngineArgs;
 
 mod error;
-pub use error::{AssertError, RuntimeError, TransactionCommitError};
+pub use error::*;
 
 mod actions;
 pub use actions::*;
@@ -58,14 +58,16 @@ use std::{
 
 use tari_bor::decode_exact;
 use tari_common_types::types::PublicKey;
-use tari_dan_common_types::Epoch;
+use tari_dan_common_types::{services::template_provider::TemplateProvider, Epoch};
 use tari_engine_types::{
     commit_result::FinalizeResult,
     component::ComponentHeader,
     confidential::ConfidentialClaim,
     indexed_value::IndexedValue,
+    instruction_result::InstructionResult,
     lock::LockFlag,
     substate::SubstateValue,
+    TemplateAddress,
 };
 use tari_template_lib::{
     args::{
@@ -94,9 +96,13 @@ use tari_template_lib::{
 };
 pub use tracker::StateTracker;
 
-use crate::runtime::{locking::LockedSubstate, scope::PushCallFrame};
+use crate::{
+    runtime::{error::TemplateProviderError, locking::LockedSubstate, scope::PushCallFrame},
+    template::LoadedTemplate,
+    transaction::TransactionProcessor,
+};
 
-pub trait RuntimeInterface: Send + Sync {
+pub trait RuntimeInterface {
     fn next_entity_id(&self) -> Result<EntityId, RuntimeError>;
     fn emit_event(&mut self, topic: String, payload: Metadata) -> Result<(), RuntimeError>;
 
@@ -177,8 +183,6 @@ pub trait RuntimeInterface: Send + Sync {
         args: EngineArgs,
     ) -> Result<InvokeResult, RuntimeError>;
 
-    fn call_invoke(&mut self, action: CallAction, args: EngineArgs) -> Result<InvokeResult, RuntimeError>;
-
     fn builtin_template_invoke(&mut self, action: BuiltinTemplateAction) -> Result<InvokeResult, RuntimeError>;
 
     fn check_component_access_rules(&self, method: &str, locked: &LockedSubstate) -> Result<(), RuntimeError>;
@@ -192,6 +196,7 @@ pub trait RuntimeInterface: Send + Sync {
 #[derive(Clone)]
 pub struct Runtime {
     interface: Arc<RwLock<dyn RuntimeInterface>>,
+    template_provider: Arc<dyn TemplateProvider<Template = LoadedTemplate, Error = TemplateProviderError>>,
 }
 
 impl Runtime {
@@ -210,12 +215,46 @@ impl Runtime {
         }
         Ok(resolved)
     }
+
+    pub fn invoke_template_function(
+        &self,
+        template_address: TemplateAddress,
+        function: &str,
+        args: Vec<Arg>,
+    ) -> Result<InstructionResult, RuntimeError> {
+        TransactionProcessor::call_function(&*self.template_provider, self, template_address, function, args).map_err(
+            |e| RuntimeError::CrossTemplateCallFunctionError {
+                template_address,
+                function: function.to_string(),
+                details: e.to_string(),
+            },
+        )
+    }
+
+    pub fn invoke_component_method(
+        &self,
+        component_address: &ComponentAddress,
+        method: &str,
+        args: Vec<Arg>,
+    ) -> Result<InstructionResult, RuntimeError> {
+        TransactionProcessor::call_method(&*self.template_provider, self, component_address, method, args).map_err(
+            |e| RuntimeError::CrossTemplateCallMethodError {
+                component_address: *component_address,
+                method: method.to_string(),
+                details: e.to_string(),
+            },
+        )
+    }
 }
 
 impl Runtime {
-    pub fn new(interface: impl RuntimeInterface + 'static) -> Self {
+    pub fn new(
+        interface: impl RuntimeInterface + 'static,
+        template_provider: impl TemplateProvider<Template = LoadedTemplate, Error = TemplateProviderError>,
+    ) -> Self {
         Self {
             interface: Arc::new(RwLock::new(interface)),
+            template_provider: Arc::new(template_provider),
         }
     }
 

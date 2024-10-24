@@ -144,7 +144,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
             network,
         )?;
 
-        let runtime = Runtime::new(runtime_interface);
+        let runtime = Runtime::new(runtime_interface, template_provider);
         let transaction_hash = transaction.hash();
 
         let (fee_instructions, instructions) = transaction.into_instructions();
@@ -259,7 +259,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
                 template_address,
                 function,
                 args,
-            } => Self::call_function(template_provider, runtime, &template_address, &function, args),
+            } => Self::call_function(template_provider, runtime, template_address, &function, args),
             Instruction::CallMethod {
                 component_address,
                 method,
@@ -402,18 +402,18 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
     pub fn call_function(
         template_provider: &TTemplateProvider,
         runtime: &Runtime,
-        template_address: &TemplateAddress,
+        template_address: TemplateAddress,
         function: &str,
         args: Vec<Arg>,
     ) -> Result<InstructionResult, TransactionError> {
         let template = template_provider
-            .get_template_module(template_address)
+            .get_template_module(&template_address)
             .map_err(|e| TransactionError::FailedToLoadTemplate {
-                address: *template_address,
+                address: template_address,
                 details: e.to_string(),
             })?
             .ok_or(TransactionError::TemplateNotFound {
-                address: *template_address,
+                address: template_address,
             })?;
 
         let function_def = template.template_def().get_function(function).cloned().ok_or_else(|| {
@@ -432,7 +432,7 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
             let mut interface_mut = runtime.interface_mut();
             let entity_id = interface_mut.next_entity_id()?;
             interface_mut.push_call_frame(PushCallFrame::Static {
-                template_address: *template_address,
+                template_address,
                 module_name: template.template_name().to_string(),
                 arg_scope,
                 entity_id,
@@ -491,19 +491,20 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> T
 
         let component_scope = IndexedWellKnownTypes::from_value(component.state())?;
 
-        runtime.interface_mut().push_call_frame(PushCallFrame::ForComponent {
-            template_address,
-            module_name: template.template_name().to_string(),
-            component_scope,
-            component_lock: component_lock.clone(),
-            arg_scope: Box::new(arg_scope),
-            entity_id: component.entity_id,
-        })?;
+        {
+            let mut interface_mut = runtime.interface_mut();
+            interface_mut.push_call_frame(PushCallFrame::ForComponent {
+                template_address,
+                module_name: template.template_name().to_string(),
+                component_scope,
+                component_lock: component_lock.clone(),
+                arg_scope: Box::new(arg_scope),
+                entity_id: component.entity_id,
+            })?;
 
-        // This must come after the call frame as that defines the authorization scope
-        runtime
-            .interface()
-            .check_component_access_rules(method, &component_lock)?;
+            // This must come after the call frame as that defines the authorization scope
+            interface_mut.check_component_access_rules(method, &component_lock)?;
+        }
 
         let mut final_args = Vec::with_capacity(args.len() + 1);
         final_args.push(to_value(component_address)?);

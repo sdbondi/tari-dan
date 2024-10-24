@@ -52,6 +52,7 @@ use super::workspace::WorkspaceError;
 use crate::{
     runtime::{locking::LockError, ActionIdent, RuntimeModuleError},
     state_store::StateStoreError,
+    template::TemplateLoaderError,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -254,6 +255,9 @@ pub enum RuntimeError {
 
     #[error("Assert error: {0}")]
     AssertError(#[from] AssertError),
+
+    #[error("Template provider error: {0}")]
+    TemplateProviderError(#[from] TemplateProviderError),
 }
 
 impl RuntimeError {
@@ -313,4 +317,38 @@ pub enum TransactionCommitError {
         resource_address: ResourceAddress,
         index: u64,
     },
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum TemplateProviderError {
+    #[error("General error: {details}")]
+    General { details: String },
+    #[error("Template not found: {address}")]
+    TemplateNotFound { address: TemplateAddress },
+    #[error("The template is unavailable for use")]
+    TemplateUnavailable,
+    #[error(transparent)]
+    TemplateLoaderError(#[from] TemplateLoaderError),
+    #[error("Failed to load the template: {details}")]
+    FailedToLoadTemplate { details: String },
+    #[error("Unsupported template type")]
+    UnsupportedTemplateType,
+    #[error("Invalid flow definition: {details}")]
+    InvalidFlowDefinition { details: String },
+    #[error("The flow engine encountered an error: {0}")]
+    FlowEngineError(#[from] crate::flow::FlowEngineError),
+}
+
+impl TemplateProviderError {
+    pub fn general<T: Display>(err: T) -> Self {
+        Self::General {
+            details: err.to_string(),
+        }
+    }
+}
+
+impl IsNotFoundError for TemplateProviderError {
+    fn is_not_found_error(&self) -> bool {
+        matches!(self, Self::TemplateNotFound { .. })
+    }
 }

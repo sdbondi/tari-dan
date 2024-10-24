@@ -1,11 +1,12 @@
 //   Copyright 2023 The Tari Project
 //   SPDX-License-Identifier: BSD-3-Clause
 
-use std::{collections::HashMap, convert::Infallible, path::Path};
+use std::{collections::HashMap, path::Path};
 
 use tari_dan_common_types::services::template_provider::TemplateProvider;
 use tari_dan_engine::{
     abi::TemplateDef,
+    runtime::TemplateProviderError,
     template::{LoadedTemplate, TemplateModuleLoader},
     wasm::{compile::compile_template, WasmModule},
 };
@@ -88,7 +89,7 @@ impl PackageBuilder {
 }
 
 impl TemplateProvider for Package {
-    type Error = Infallible;
+    type Error = TemplateProviderError;
     type Template = LoadedTemplate;
 
     fn get_template_module(

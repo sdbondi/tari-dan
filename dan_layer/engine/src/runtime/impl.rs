@@ -53,9 +53,6 @@ use tari_template_lib::{
         BucketAction,
         BucketRef,
         BuiltinTemplateAction,
-        CallAction,
-        CallFunctionArg,
-        CallMethodArg,
         CallerContextAction,
         ComponentAction,
         ComponentRef,
@@ -336,28 +333,6 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
                 method: method.to_string(),
                 details: e.to_string(),
             })
-    }
-
-    fn invoke_template_function(
-        &self,
-        template_address: &TemplateAddress,
-        function: &str,
-        args: Vec<Arg>,
-    ) -> Result<InstructionResult, RuntimeError> {
-        // we are initializing a new runtime for the nested call
-        let call_runtime = Runtime::new(self.clone());
-        TransactionProcessor::call_function(
-            &*self.template_provider,
-            &call_runtime,
-            template_address,
-            function,
-            args,
-        )
-        .map_err(|e| RuntimeError::CrossTemplateCallFunctionError {
-            template_address: *template_address,
-            function: function.to_string(),
-            details: e.to_string(),
-        })
     }
 
     fn check_resource_auth_hook(&mut self, hook: &AuthHook) -> Result<(), RuntimeError> {
@@ -2137,39 +2112,6 @@ impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> RuntimeInte
                 Ok(InvokeResult::encode(&random)?)
             },
         }
-    }
-
-    fn call_invoke(&mut self, action: CallAction, args: EngineArgs) -> Result<InvokeResult, RuntimeError> {
-        self.invoke_modules_on_runtime_call("call_invoke")?;
-        debug!(
-            target: LOG_TARGET,
-            "Call invoke: {:?} {:?}",
-            action,
-            args,
-        );
-
-        let exec_result = match action {
-            CallAction::CallFunction => {
-                let CallFunctionArg {
-                    template_address,
-                    function,
-                    args,
-                } = args.assert_one_arg()?;
-
-                self.invoke_template_function(&template_address, &function, args)?
-            },
-            CallAction::CallMethod => {
-                let CallMethodArg {
-                    component_address,
-                    method,
-                    args,
-                } = args.assert_one_arg()?;
-
-                self.invoke_component_method(&component_address, &method, args)?
-            },
-        };
-
-        Ok(InvokeResult::from_value(exec_result.indexed.into_value()))
     }
 
     fn generate_uuid(&mut self) -> Result<[u8; 32], RuntimeError> {

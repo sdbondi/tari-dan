@@ -29,6 +29,7 @@ use tari_dan_common_types::{optional::Optional, services::template_provider::Tem
 use tari_dan_engine::{
     flow::FlowFactory,
     function_definitions::FlowFunctionDefinition,
+    runtime::TemplateProviderError,
     template::{LoadedTemplate, TemplateModuleLoader},
     wasm::WasmModule,
 };
@@ -46,7 +47,7 @@ use tari_template_lib::models::TemplateAddress;
 use super::TemplateConfig;
 use crate::template_manager::{
     implementation::cmap_semaphore,
-    interface::{Template, TemplateExecutable, TemplateManagerError, TemplateMetadata, TemplateRegistration},
+    interface::{Template, TemplateExecutable, TemplateMetadata, TemplateRegistration},
 };
 
 const LOG_TARGET: &str = "tari::validator_node::template_manager";
@@ -66,7 +67,7 @@ impl<TAddr: NodeAddressable> TemplateManager<TAddr> {
     pub fn initialize(
         global_db: GlobalDb<SqliteGlobalDbAdapter<TAddr>>,
         config: TemplateConfig,
-    ) -> Result<Self, TemplateManagerError> {
+    ) -> Result<Self, TemplateProviderError> {
         // load the builtin account templates
         let builtin_templates = Self::load_builtin_templates();
         let cache = mini_moka::sync::Cache::builder()
@@ -126,18 +127,21 @@ impl<TAddr: NodeAddressable> TemplateManager<TAddr> {
         }
     }
 
-    pub fn template_exists(&self, address: &TemplateAddress) -> Result<bool, TemplateManagerError> {
+    pub fn template_exists(&self, address: &TemplateAddress) -> Result<bool, TemplateProviderError> {
         if self.builtin_templates.contains_key(address) {
             return Ok(true);
         }
-        let mut tx = self.global_db.create_transaction()?;
+        let mut tx = self
+            .global_db
+            .create_transaction()
+            .map_err(TemplateProviderError::general)?;
         self.global_db
             .templates(&mut tx)
             .template_exists(address)
-            .map_err(|_| TemplateManagerError::TemplateNotFound { address: *address })
+            .map_err(|_| TemplateProviderError::TemplateNotFound { address: *address })
     }
 
-    pub fn fetch_template(&self, address: &TemplateAddress) -> Result<Template, TemplateManagerError> {
+    pub fn fetch_template(&self, address: &TemplateAddress) -> Result<Template, TemplateProviderError> {
         // first of all, check if the address is for a bulitin template
         if let Some(template) = self.builtin_templates.get(address) {
             return Ok(template.to_owned());
@@ -147,11 +151,12 @@ impl<TAddr: NodeAddressable> TemplateManager<TAddr> {
         let template = self
             .global_db
             .templates(&mut tx)
-            .get_template(address)?
-            .ok_or(TemplateManagerError::TemplateNotFound { address: *address })?;
+            .get_template(address)
+            .map_err(TemplateProviderError::general)?
+            .ok_or(TemplateProviderError::TemplateNotFound { address: *address })?;
 
         if !matches!(template.status, TemplateStatus::Active | TemplateStatus::Deprecated) {
-            return Err(TemplateManagerError::TemplateUnavailable);
+            return Err(TemplateProviderError::TemplateUnavailable);
         }
 
         // first check debug
@@ -165,7 +170,7 @@ impl<TAddr: NodeAddressable> TemplateManager<TAddr> {
                 TemplateExecutable::Flow(_) => {
                     todo!("debug replacements for flow templates not implemented");
                 },
-                _ => return Err(TemplateManagerError::TemplateUnavailable),
+                _ => return Err(TemplateProviderError::TemplateUnavailable),
             }
 
             Ok(result)
@@ -174,10 +179,17 @@ impl<TAddr: NodeAddressable> TemplateManager<TAddr> {
         }
     }
 
-    pub fn fetch_template_metadata(&self, limit: usize) -> Result<Vec<TemplateMetadata>, TemplateManagerError> {
-        let mut tx = self.global_db.create_transaction()?;
+    pub fn fetch_template_metadata(&self, limit: usize) -> Result<Vec<TemplateMetadata>, TemplateProviderError> {
+        let mut tx = self
+            .global_db
+            .create_transaction()
+            .map_err(TemplateProviderError::general)?;
         // TODO: we should be able to fetch just the metadata and not the compiled code
-        let templates = self.global_db.templates(&mut tx).get_templates(limit)?;
+        let templates = self
+            .global_db
+            .templates(&mut tx)
+            .get_templates(limit)
+            .map_err(TemplateProviderError::general)?;
         let mut templates: Vec<TemplateMetadata> = templates.into_iter().map(Into::into).collect();
         let mut builtin_metadata: Vec<TemplateMetadata> =
             self.builtin_templates.values().map(|t| t.metadata.to_owned()).collect();
@@ -186,7 +198,7 @@ impl<TAddr: NodeAddressable> TemplateManager<TAddr> {
         Ok(templates)
     }
 
-    pub(super) fn add_template(&self, template: TemplateRegistration) -> Result<(), TemplateManagerError> {
+    pub(super) fn add_template(&self, template: TemplateRegistration) -> Result<(), TemplateProviderError> {
         let template = DbTemplate {
             template_name: template.template_name,
             template_address: template.template_address.into_array().into(),
@@ -205,13 +217,18 @@ impl<TAddr: NodeAddressable> TemplateManager<TAddr> {
             manifest: None,
         };
 
-        let mut tx = self.global_db.create_transaction()?;
+        let mut tx = self
+            .global_db
+            .create_transaction()
+            .map_err(TemplateProviderError::general)?;
         let mut templates_db = self.global_db.templates(&mut tx);
         if templates_db.get_template(&*template.template_address)?.is_some() {
             return Ok(());
         }
-        templates_db.insert_template(template)?;
-        tx.commit()?;
+        templates_db
+            .insert_template(template)
+            .map_err(TemplateProviderError::general)?;
+        tx.commit().map_err(TemplateProviderError::general)?;
 
         Ok(())
     }
@@ -220,24 +237,36 @@ impl<TAddr: NodeAddressable> TemplateManager<TAddr> {
         &self,
         address: TemplateAddress,
         update: DbTemplateUpdate,
-    ) -> Result<(), TemplateManagerError> {
-        let mut tx = self.global_db.create_transaction()?;
+    ) -> Result<(), TemplateProviderError> {
+        let mut tx = self
+            .global_db
+            .create_transaction()
+            .map_err(TemplateProviderError::general)?;
         let mut template_db = self.global_db.templates(&mut tx);
-        template_db.update_template(&address, update)?;
-        tx.commit()?;
+        template_db
+            .update_template(&address, update)
+            .map_err(TemplateProviderError::general)?;
+        tx.commit().map_err(TemplateProviderError::general)?;
 
         Ok(())
     }
 
-    pub(super) fn fetch_pending_templates(&self) -> Result<Vec<DbTemplate>, TemplateManagerError> {
-        let mut tx = self.global_db.create_transaction()?;
-        let templates = self.global_db.templates(&mut tx).get_pending_templates(1000)?;
+    pub(super) fn fetch_pending_templates(&self) -> Result<Vec<DbTemplate>, TemplateProviderError> {
+        let mut tx = self
+            .global_db
+            .create_transaction()
+            .map_err(TemplateProviderError::general)?;
+        let templates = self
+            .global_db
+            .templates(&mut tx)
+            .get_pending_templates(1000)
+            .map_err(TemplateProviderError::general)?;
         Ok(templates)
     }
 }
 
 impl<TAddr: NodeAddressable + Send + Sync + 'static> TemplateProvider for TemplateManager<TAddr> {
-    type Error = TemplateManagerError;
+    type Error = TemplateProviderError;
     type Template = LoadedTemplate;
 
     fn get_template_module(&self, address: &TemplateAddress) -> Result<Option<Self::Template>, Self::Error> {
@@ -269,9 +298,10 @@ impl<TAddr: NodeAddressable + Send + Sync + 'static> TemplateProvider for Templa
                 let module = WasmModule::from_code(wasm);
                 module.load_template()?
             },
-            TemplateExecutable::Manifest(_) => return Err(TemplateManagerError::UnsupportedTemplateType),
+            TemplateExecutable::Manifest(_) => return Err(TemplateProviderError::UnsupportedTemplateType),
             TemplateExecutable::Flow(flow_json) => {
-                let definition: FlowFunctionDefinition = serde_json::from_str(&flow_json)?;
+                let definition: FlowFunctionDefinition = serde_json::from_str(&flow_json)
+                    .map_err(|e| TemplateProviderError::InvalidFlowDefinition { details: e.to_string() })?;
                 let factory = FlowFactory::try_create::<Self>(definition)?;
                 LoadedTemplate::Flow(factory)
             },

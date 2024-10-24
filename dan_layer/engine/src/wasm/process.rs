@@ -28,7 +28,10 @@ use tari_template_lib::{
     args::{
         BucketInvokeArg,
         BuiltinTemplateInvokeArg,
+        CallAction,
+        CallFunctionArg,
         CallInvokeArg,
+        CallMethodArg,
         CallerContextInvokeArg,
         ComponentInvokeArg,
         ConsensusInvokeArg,
@@ -48,7 +51,7 @@ use wasmer::{imports, AsStoreMut, Function, FunctionEnv, FunctionEnvMut, Instanc
 
 use super::version::are_versions_compatible;
 use crate::{
-    runtime::Runtime,
+    runtime::{EngineArgs, Runtime, RuntimeInterface},
     traits::Invokable,
     wasm::{
         environment::{AllocPtr, WasmEnv},
@@ -63,16 +66,19 @@ pub const ENGINE_TARI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct WasmProcess {
     module: LoadedWasmTemplate,
-    env: WasmEnv<Runtime>,
+    env: WasmEnv<()>,
     instance: Instance,
 }
 
 impl WasmProcess {
-    pub fn init(store: &mut Store, module: LoadedWasmTemplate, state: Runtime) -> Result<Self, WasmExecutionError> {
+    pub fn init<S: RuntimeInterface>(
+        store: &mut Store,
+        module: LoadedWasmTemplate,
+        state: S,
+    ) -> Result<Self, WasmExecutionError> {
         Self::validate_template_tari_version(&module)?;
 
-        let mut env = WasmEnv::new(state);
-        let fn_env = FunctionEnv::new(store, env.clone());
+        let fn_env = FunctionEnv::new(store, WasmEnv::new(state));
 
         let imports = imports! {
             "env" => {
@@ -90,6 +96,7 @@ impl WasmProcess {
             .set_alloc_funcs(mem_alloc.clone());
 
         // Also set these for the local copy
+        let mut env = WasmEnv::new(());
         env.set_memory(memory).set_alloc_funcs(mem_alloc);
 
         Ok(Self { module, env, instance })
@@ -114,7 +121,7 @@ impl WasmProcess {
     }
 
     fn tari_engine_entrypoint(
-        mut env: FunctionEnvMut<WasmEnv<Runtime>>,
+        mut env: FunctionEnvMut<WasmEnv<&mut dyn RuntimeInterface>>,
         op: i32,
         arg_ptr: WasmPtr<u8>,
         arg_len: u32,
@@ -192,7 +199,30 @@ impl WasmProcess {
                 runtime.interface_mut().emit_event(arg.topic, arg.payload)
             }),
             EngineOp::CallInvoke => Self::handle(store, env_mut, arg, |runtime, arg: CallInvokeArg| {
-                runtime.interface_mut().call_invoke(arg.action, arg.args.into())
+                let CallInvokeArg { action, args } = arg;
+                let args = EngineArgs::from(args);
+
+                match action {
+                    CallAction::CallFunction => {
+                        let CallFunctionArg {
+                            template_address,
+                            function,
+                            args,
+                        } = args.assert_one_arg()?;
+                        let result = runtime.invoke_template_function(template_address, &function, args)?;
+                        Ok(result)
+                    },
+                    CallAction::CallMethod => {
+                        let CallMethodArg {
+                            component_address,
+                            method,
+                            args,
+                        } = args.assert_one_arg()?;
+
+                        let result = runtime.invoke_component_method(&component_address, &method, args)?;
+                        Ok(result)
+                    },
+                }
             }),
             EngineOp::ProofInvoke => Self::handle(store, env_mut, arg, |runtime, arg: ProofInvokeArg| {
                 log::debug!(target: LOG_TARGET, "proof action = {:?}", arg.action);
@@ -326,7 +356,7 @@ impl Invokable<Store> for WasmProcess {
     }
 }
 
-fn debug_handler<T: Send + 'static>(mut env: FunctionEnvMut<WasmEnv<T>>, arg_ptr: WasmPtr<u8>, arg_len: u32) {
+fn debug_handler<T>(mut env: FunctionEnvMut<WasmEnv<T>>, arg_ptr: WasmPtr<u8>, arg_len: u32) {
     const WASM_DEBUG_LOG_TARGET: &str = "tari::dan::wasm";
     let (state, mut store) = env.data_and_store_mut();
 
@@ -340,13 +370,7 @@ fn debug_handler<T: Send + 'static>(mut env: FunctionEnvMut<WasmEnv<T>>, arg_ptr
     }
 }
 
-fn on_panic_handler<T: Send + 'static>(
-    mut env: FunctionEnvMut<WasmEnv<T>>,
-    msg_ptr: WasmPtr<u8>,
-    msg_len: i32,
-    line: i32,
-    col: i32,
-) {
+fn on_panic_handler<T>(mut env: FunctionEnvMut<WasmEnv<T>>, msg_ptr: WasmPtr<u8>, msg_len: i32, line: i32, col: i32) {
     const WASM_DEBUG_LOG_TARGET: &str = "tari::dan::wasm";
     let (state, mut store) = env.data_and_store_mut();
 
