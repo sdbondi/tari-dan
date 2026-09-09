@@ -295,7 +295,7 @@ pub trait RuntimeInterface {
     ) -> Result<Vec<tari_bor::Value>, RuntimeError>;
 
     fn resolve_workspace_id(&self, workspace_id: &WorkspaceOffsetId) -> Result<tari_bor::Value, RuntimeError>;
-    fn set_runtime_pointer(&mut self, pointer: *mut Box<dyn RuntimeInterface>);
+    fn set_runtime_pointer(&mut self, pointer: NonNull<Box<dyn RuntimeInterface>>);
 }
 
 #[derive(Clone)]
@@ -316,15 +316,12 @@ impl Runtime {
         }
     }
 
-    /// Creates a Runtime from a raw pointer. Returns None if the pointer is null.
-    pub fn from_pointer(interface: *mut Box<dyn RuntimeInterface>) -> Option<Self> {
-        Some(Self {
-            interface: NonNull::new(interface)?,
-        })
+    pub const fn from_non_null(interface: NonNull<Box<dyn RuntimeInterface>>) -> Self {
+        Self { interface }
     }
 
-    pub fn as_pointer(&self) -> *mut Box<dyn RuntimeInterface> {
-        self.interface.as_ptr()
+    pub const fn as_non_null(&self) -> NonNull<Box<dyn RuntimeInterface>> {
+        self.interface
     }
 
     pub fn interface(&self) -> &dyn RuntimeInterface {

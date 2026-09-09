@@ -240,7 +240,7 @@ where
         )?) as Box<dyn RuntimeInterface>;
 
         let runtime = Runtime::from_mut(&mut runtime_interface);
-        runtime_interface.set_runtime_pointer(runtime.as_pointer());
+        runtime_interface.set_runtime_pointer(runtime.as_non_null());
 
         let transaction_hash = id.as_hash();
 

@@ -476,7 +476,7 @@ impl<TStore: StateReader + Clone + 'static, TTemplateProvider: TemplateProvider<
     fn get_call_runtime(&self) -> Runtime {
         // Load the runtime pointer that must be set by whoever initialized this interface
         let ptr = self.runtime_pointer.expect("BUG: Runtime pointer not set");
-        Runtime::from_pointer(ptr.as_ptr()).expect("Runtime pointer is null")
+        Runtime::from_non_null(ptr)
     }
 
     fn invoke_component_method(
@@ -4177,8 +4177,8 @@ where
         })?
     }
 
-    fn set_runtime_pointer(&mut self, pointer: *mut Box<dyn RuntimeInterface>) {
-        self.runtime_pointer = NonNull::new(pointer);
+    fn set_runtime_pointer(&mut self, pointer: NonNull<Box<dyn RuntimeInterface>>) {
+        self.runtime_pointer = Some(pointer);
     }
 }
 
