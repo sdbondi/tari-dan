@@ -397,11 +397,17 @@ where TConsensusSpec: ConsensusSpec
                         return Ok(());
                     }
 
-                    let stats = ValidatorConsensusStats::get_by_public_key(tx, block.epoch(), &atom.public_key)?;
-                    if stats.missed_proposals < self.config.consensus_constants.missed_proposal_evict_threshold {
+                    // A key with no stats recorded for this epoch has missed no proposals, so it is never eligible
+                    // for eviction. A proposal naming one is byzantine and must no-vote rather than abort consensus.
+                    let missed_proposals =
+                        ValidatorConsensusStats::get_by_public_key(tx, block.epoch(), &atom.public_key)
+                            .optional()?
+                            .map(|stats| stats.missed_proposals)
+                            .unwrap_or(0);
+                    if missed_proposals < self.config.consensus_constants.missed_proposal_evict_threshold {
                         warn!(
                             target: LOG_TARGET,
-                            "❌ NO VOTE: {} (actual missed count: {}, threshold: {})", NoVoteReason::ShouldNotEvictNode, stats.missed_proposals, self.config.consensus_constants.missed_proposal_evict_threshold
+                            "❌ NO VOTE: {} (actual missed count: {}, threshold: {})", NoVoteReason::ShouldNotEvictNode, missed_proposals, self.config.consensus_constants.missed_proposal_evict_threshold
                         );
 
                         proposed_block_change_set.set_no_vote(NoVoteReason::ShouldNotEvictNode);
@@ -412,7 +418,7 @@ where TConsensusSpec: ConsensusSpec
                         target: LOG_TARGET,
                         "💀 EVICTING node: {} with missed count {}",
                         atom.public_key,
-                        stats.missed_proposals
+                        missed_proposals
                     );
                     proposed_block_change_set.add_evict_node(atom.public_key);
                 },
